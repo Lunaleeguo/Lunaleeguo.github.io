@@ -1,0 +1,969 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>钱涛</title>
+  <subtitle>编码记录</subtitle>
+  <link href="/atom.xml" rel="self"/>
+  
+  <link href="https://bestTao.github.io/"/>
+  <updated>2017-01-16T11:49:08.089Z</updated>
+  <id>https://bestTao.github.io/</id>
+  
+  <author>
+    <name>钱涛</name>
+    
+  </author>
+  
+  <generator uri="http://hexo.io/">Hexo</generator>
+  
+  <entry>
+    <title>自定义控件？试试300行代码实现QQ侧滑菜单</title>
+    <link href="https://bestTao.github.io/2017/01/16/%E8%87%AA%E5%AE%9A%E4%B9%89%E6%8E%A7%E4%BB%B6%EF%BC%9F%E8%AF%95%E8%AF%95300%E8%A1%8C%E4%BB%A3%E7%A0%81%E5%AE%9E%E7%8E%B0QQ%E4%BE%A7%E6%BB%91%E8%8F%9C%E5%8D%95/"/>
+    <id>https://bestTao.github.io/2017/01/16/自定义控件？试试300行代码实现QQ侧滑菜单/</id>
+    <published>2017-01-16T11:36:01.000Z</published>
+    <updated>2017-01-16T11:49:08.089Z</updated>
+    
+    <content type="html"><![CDATA[<p>Android自定义控件并没有什么捷径可走，需要不断得模仿练习才能出师。这其中进行模仿练习的demo的选择是至关重要的，最优选择莫过于官方的控件了，但是官方控件动辄就是几千行代码往往可能容易让人望而却步。本文介绍如何理解并实现Android端的QQ侧滑菜单，300行代码即可。<br>首先上完成的效果图：</p>
+<div align="center"><br>    <img src="https://dn-mhke0kuv.qbox.me/7e87f12fd3f252b119d1.gif"><br></div>
+
+<p>大家可以对比自己手机上QQ的侧滑菜单，效果与之几乎没有什么差别。</p>
+<h2 id="首先"><a href="#首先" class="headerlink" title="首先"></a>首先</h2><p>本文并不会长篇大论的讲解自定义控件所需要的从绘图、屏幕坐标系、滑动到动画等原理，因为我相信无论您是否会自定义控件，这些原理您都已经从别处烂熟于心了。但是为了方便理解，会在实现的过程中进行穿插讲解。</p>
+<h2 id="确定目标及方向"><a href="#确定目标及方向" class="headerlink" title="确定目标及方向"></a>确定目标及方向</h2><p>动手撸代码前，我们看一眼这个效果。首先确定我们的目标是需要自定义一个ViewGroup，需要控制它的两个子View进行滑动变换。进一步观察我们可以发现两个子View是叠加再一起的，所以为了减少代码我们可以考虑直接继承于ViewGroup的一个实现类：<code>FrameLayout</code>。底层的是菜单视图<code>menu</code>，叠加在上面的是主界面<code>main</code>。<br>新建一个类：<code>CoordinatorMenu</code>，并在加载布局后拿到两个子View<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="keyword">public</span> <span class="class"><span class="keyword">class</span> <span class="title">CoordinatorMenu</span> <span class="keyword">extends</span> <span class="title">FrameLayout</span> </span>&#123;</div><div class="line">    <span class="keyword">private</span> View mMenuView;</div><div class="line">    <span class="keyword">private</span> View mMainView;</div><div class="line"></div><div class="line">    <span class="comment">//加载完布局文件后调用</span></div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">onFinishInflate</span><span class="params">()</span> </span>&#123;</div><div class="line">        mMenuView = getChildAt(<span class="number">0</span>);<span class="comment">//第一个子View在底层，作为menu</span></div><div class="line">        mMainView = getChildAt(<span class="number">1</span>);<span class="comment">//第二个子View在上层，作为main</span></div><div class="line">    &#125;</div></pre></td></tr></table></figure></p>
+<h2 id="为滑动做准备"><a href="#为滑动做准备" class="headerlink" title="为滑动做准备"></a>为滑动做准备</h2><p>实现手指跟随滑动，这其中有很多方法，最基本的莫过于重写<code>onTouchEvent</code>方法并配合<code>Scroller</code>实现了，但是这也是最复杂的了。还好官方提供了一个<code>ViewDragHelper</code>类帮助我们去实现（本质上还是使用Scroller）。<br>在我们的构造方法中通过<code>ViewDragHelper</code>静态方法进行其初始化：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line">mViewDragHelper = ViewDragHelper.create(</div><div class="line">    <span class="keyword">this</span>,</div><div class="line">    TOUCH_SLOP_SENSITIVITY,</div><div class="line">    <span class="keyword">new</span> CoordinatorCallback());</div></pre></td></tr></table></figure></p>
+<p>三个参数的含义：</p>
+<ul>
+<li>需要监听的View，这里就是当前的控件</li>
+<li>开始触摸滑动的敏感度，值越大越敏感，1.0f是正常值</li>
+<li>一个Callback回调，整个ViewDragHelper的核心逻辑所在，这里自定义了一个它的实现类</li>
+</ul>
+<p>然后拦截触摸事件，交给我们的主角<code>ViewDragHelper</code>处理：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">boolean</span> <span class="title">onInterceptTouchEvent</span><span class="params">(MotionEvent ev)</span> </span>&#123;</div><div class="line">    <span class="keyword">return</span> mViewDragHelper.shouldInterceptTouchEvent(ev);</div><div class="line">&#125;</div><div class="line"></div><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">boolean</span> <span class="title">onTouchEvent</span><span class="params">(MotionEvent event)</span> </span>&#123;</div><div class="line">    <span class="comment">//将触摸事件传递给ViewDragHelper，此操作必不可少</span></div><div class="line">    mViewDragHelper.processTouchEvent(event);</div><div class="line">    <span class="keyword">return</span> <span class="keyword">true</span>;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>处理<code>computeScroll</code>方法：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="comment">//滑动过程中调用</span></div><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">computeScroll</span><span class="params">()</span> </span>&#123;</div><div class="line">    <span class="keyword">if</span> (mViewDragHelper.continueSettling(<span class="keyword">true</span>)) &#123;</div><div class="line">        ViewCompat.postInvalidateOnAnimation(<span class="keyword">this</span>);<span class="comment">//处理刷新，实现平滑移动</span></div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>处理部分Callback回调<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="comment">//告诉ViewDragHelper对哪个子View进行拖动滑动</span></div><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">boolean</span> <span class="title">tryCaptureView</span><span class="params">(View child, <span class="keyword">int</span> pointerId)</span> </span>&#123;</div><div class="line">    <span class="comment">//侧滑菜单默认是关闭的</span></div><div class="line">    <span class="comment">//用户必定只能先触摸的到上层的主界面</span></div><div class="line">    <span class="keyword">return</span> mMainView == child;</div><div class="line">&#125;</div><div class="line"></div><div class="line"><span class="comment">//进行水平方向滑动</span></div><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">int</span> <span class="title">clampViewPositionHorizontal</span><span class="params">(View child, <span class="keyword">int</span> left, <span class="keyword">int</span> dx)</span> </span>&#123;</div><div class="line">    <span class="keyword">return</span> left;<span class="comment">//通常返回left即可，left指代此view的左边缘的位置</span></div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<h2 id="main的滑动"><a href="#main的滑动" class="headerlink" title="main的滑动"></a>main的滑动</h2><p>这样我们就能在水平方向上随意拖动上层的子View–<code>main</code>了，接下来就是限制它水平滑动的范围了，范围如下图所示：</p>
+<div align="center"><br>    <img src="https://dn-mhke0kuv.qbox.me/b2d745f1dd49c5331524.png"><br></div>
+
+<p>改写上面的水平滑动方法，<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">int</span> <span class="title">clampViewPositionHorizontal</span><span class="params">(View child, <span class="keyword">int</span> left, <span class="keyword">int</span> dx)</span> </span>&#123;</div><div class="line">    <span class="keyword">if</span> (left &lt; <span class="number">0</span>) &#123;</div><div class="line">        left = <span class="number">0</span>;<span class="comment">//初始位置是屏幕的左边缘</span></div><div class="line">    &#125; <span class="keyword">else</span> <span class="keyword">if</span> (left &gt; mMenuWidth) &#123;</div><div class="line">        left = mMenuWidth;<span class="comment">//最远的距离就是菜单栏完全展开后的menu的宽度</span></div><div class="line">    &#125;</div><div class="line">    <span class="keyword">return</span> left;    </div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p><strong>增加回弹效果：</strong></p>
+<ul>
+<li>当菜单关闭，从左向右滑动<code>main</code>的时候，小于一定距离松开手，需要让它回弹到最左边，否则直接打开菜单</li>
+<li>当菜单完全打开，从右向左滑动<code>main</code>的时候，小于一定距离松开手，需要让它回弹到最右边，否则直接关闭菜单</li>
+</ul>
+<p>首先判断滑动的方向：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="comment">//当view位置改变时调用，也就是拖动的时候</span></div><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">onViewPositionChanged</span><span class="params">(View changedView, <span class="keyword">int</span> left, <span class="keyword">int</span> top, <span class="keyword">int</span> dx, <span class="keyword">int</span> dy)</span> </span>&#123;</div><div class="line">    <span class="comment">//dx代表距离上一个滑动时间间隔后的滑动距离</span></div><div class="line">    <span class="keyword">if</span> (dx &gt; <span class="number">0</span>) &#123;<span class="comment">//正</span></div><div class="line">        mDragOrientation = LEFT_TO_RIGHT;<span class="comment">//从左往右</span></div><div class="line">    &#125; <span class="keyword">else</span> <span class="keyword">if</span> (dx &lt; <span class="number">0</span>) &#123;<span class="comment">//负</span></div><div class="line">        mDragOrientation = RIGHT_TO_LEFT;<span class="comment">//从右往左</span></div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>在松开手后：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="comment">//View释放后调用</span></div><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">onViewReleased</span><span class="params">(View releasedChild, <span class="keyword">float</span> xvel, <span class="keyword">float</span> yvel)</span> </span>&#123;</div><div class="line">    <span class="keyword">super</span>.onViewReleased(releasedChild, xvel, yvel);</div><div class="line">    <span class="keyword">if</span> (mDragOrientation == LEFT_TO_RIGHT) &#123;<span class="comment">//从左向右滑</span></div><div class="line">        <span class="keyword">if</span> (mMainView.getLeft() &lt; mSpringBackDistance) &#123;<span class="comment">//小于设定的距离</span></div><div class="line">            closeMenu();<span class="comment">//关闭菜单</span></div><div class="line">        &#125; <span class="keyword">else</span> &#123;</div><div class="line">            openMenu();<span class="comment">//否则打开菜单</span></div><div class="line">        &#125;</div><div class="line">    &#125; <span class="keyword">else</span> <span class="keyword">if</span> (mDragOrientation == RIGHT_TO_LEFT) &#123;<span class="comment">//从右向左滑</span></div><div class="line">        <span class="keyword">if</span> (mMainView.getLeft() &lt; mMenuWidth - mSpringBackDistance)&#123;<span class="comment">//小于设定的距离</span></div><div class="line">            closeMenu();<span class="comment">//关闭菜单</span></div><div class="line">        &#125; <span class="keyword">else</span> &#123;</div><div class="line">            openMenu();<span class="comment">//否则打开菜单</span></div><div class="line">        &#125;</div><div class="line">    &#125;</div><div class="line">&#125;</div><div class="line"></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">openMenu</span><span class="params">()</span> </span>&#123;</div><div class="line">    mViewDragHelper.smoothSlideViewTo(mMainView, mMenuWidth, <span class="number">0</span>);</div><div class="line">    ViewCompat.postInvalidateOnAnimation(CoordinatorMenu.<span class="keyword">this</span>);</div><div class="line">&#125;</div><div class="line"></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">closeMenu</span><span class="params">()</span> </span>&#123;</div><div class="line">    mViewDragHelper.smoothSlideViewTo(mMainView, <span class="number">0</span>, <span class="number">0</span>);</div><div class="line">    ViewCompat.postInvalidateOnAnimation(CoordinatorMenu.<span class="keyword">this</span>);</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<h2 id="menu的滑动"><a href="#menu的滑动" class="headerlink" title="menu的滑动"></a>menu的滑动</h2><p>展开后，我们就可以触摸到底层的<code>menu</code>视图了，我们拽<code>menu</code>不能拖动它本身，也不能拖动<code>main</code>，因为我们在前面指定了触摸只作用于<code>main</code>。我们可以先思考一下，QQ的侧滑菜单底层是跟随上层移动的（细心的您会发现不是完全跟随的，它们之间的距离变化有个线性关系，这个稍后再说），这样的话那我们就可以把<code>menu</code>完全托付给<code>main</code>处理，分两步：1.<code>menu</code>托付给<code>main</code>;2.<code>main</code>滑动时管理<code>menu</code>的滑动。<br>首先我们要先确定<code>menu</code>的初始位置及大小，重写<code>layout</code>方法，向左偏移一个<code>mMenuOffset</code><br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">onLayout</span><span class="params">(<span class="keyword">boolean</span> changed, <span class="keyword">int</span> left, <span class="keyword">int</span> top, <span class="keyword">int</span> right, <span class="keyword">int</span> bottom)</span> </span>&#123;</div><div class="line">    <span class="keyword">super</span>.onLayout(changed, left, top, right, bottom);</div><div class="line">    MarginLayoutParams menuParams = (MarginLayoutParams) mMenuView.getLayoutParams();</div><div class="line">    menuParams.width = mMenuWidth;</div><div class="line">    mMenuView.setLayoutParams(menuParams);</div><div class="line">    mMenuView.layout(-mMenuOffset, top, mMenuWidth - mMenuOffset, bottom);</div><div class="line">    &#125;</div></pre></td></tr></table></figure></p>
+<p><strong>我们先实现第一步：触摸到<code>menu</code>，交给<code>main</code>处理。</strong><br>在这之前改写前面的回调方法，让<code>menu</code>能接受触摸事件<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">boolean</span> <span class="title">tryCaptureView</span><span class="params">(View child, <span class="keyword">int</span> pointerId)</span> </span>&#123;</div><div class="line">    <span class="keyword">return</span> mMainView == child || mMenuView == child;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>然后<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="comment">//观察被触摸的view</span></div><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">onViewCaptured</span><span class="params">(View capturedChild, <span class="keyword">int</span> activePointerId)</span> </span>&#123;</div><div class="line">    <span class="keyword">if</span> (capturedChild == mMenuView) &#123;<span class="comment">//当触摸的view是menu</span></div><div class="line">        mViewDragHelper.captureChildView(mMainView, activePointerId);<span class="comment">//交给main处理</span></div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>在这一步后，我们就可以在手指触摸到<code>menu</code>的时候，拖动<code>main</code>。<br><del>这个感觉就像是指桑骂槐，指着的是<code>menu</code>，骂的却是<code>main</code>，哈哈。</del></p>
+<p><strong>接下来我们实现第二步，<code>menu</code>跟随<code>main</code>滑动</strong><br>先看下面<code>menu</code>与<code>main</code>的位置关系图</p>
+<div align="center"><br>    <img src="https://dn-mhke0kuv.qbox.me/48d0d02b811e9966e655.png"><br></div>
+
+<p>很明显我们能得出一个结论：</p>
+<blockquote>
+<p>从menu关闭到menu的打开：menu移动了它的初始向左偏移距离<code>mMenuOffset</code>，main移动了的距离正好是menu的宽度<code>mMenuWidth</code></p>
+</blockquote>
+<p>所以我们就可以用之前用到的回调：<code>onViewPositionChanged(View changedView, int left, int top, int dx, int dy)</code>，因为这里的<code>dx</code>正是指代移动距离，只要<code>main</code>移动了一个<code>dx</code>，那我们就可以让<code>menu</code>移动一个<code>dx * mMenuOffset / mMenuWidth</code>，不就行了吗？<br>看起来十分美好，实践起来却是No!No!No!，因为需要对<code>menu</code>使用<code>layout</code>方法进行重新布局以达到移动效果，而这个方法传进去的值是<strong>int</strong>型，而我们上面的计算公式的结果很明显是个<strong>float</strong>，况且很不巧的是这个<code>dx</code>是指<strong>代表距离上一个滑动时间间隔后的滑动距离</strong>，就是把你整个滑动过程分割成很多的小块，每一小块的时间很短，如果你滑动很慢的话，那么在这很短的时间内<code>dx=1</code>，呵呵。所以这样计算的话精度严重丢失，不能达到同步移动的效果。<br>所以我们只能换一种思维，使用它们之间的另一种关系：<code>menu</code>左边缘和<code>main</code>左边缘之间的距离是由<code>mMenuOffset</code>增加到<code>mMenuWidth</code>，此时<code>main</code>移动了<code>mMenuWidth</code>。可以认为这种增加是线性的，如下图所示：</p>
+<div align="center"><br>    <img src="https://dn-mhke0kuv.qbox.me/21792363be1f2ffce9b3.png"><br></div>
+
+<p>根据图及公式<code>y = kx + d</code>得出：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line">mainLeft - menuLeft = (mMenuWidth - mMenuOffset) / mMenuWidth * mainLeft</div><div class="line">+ mMenuOffset</div></pre></td></tr></table></figure></p>
+<p>所以这样重写回调<code>onViewPositionChanged</code>即可使<code>menu</code>跟随<code>main</code>进行滑动变换：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">onViewPositionChanged</span><span class="params">(View changedView, <span class="keyword">int</span> left, <span class="keyword">int</span> top, <span class="keyword">int</span> dx, <span class="keyword">int</span> dy)</span> </span>&#123;</div><div class="line">    <span class="keyword">float</span> scale = (<span class="keyword">float</span>) (mMenuWidth - mMenuOffset) / (<span class="keyword">float</span>) mMenuWidth;</div><div class="line">    <span class="keyword">int</span> menuLeft = left - ((<span class="keyword">int</span>) (scale * left) + mMenuOffset);</div><div class="line">    mMenuView.layout(menuLeft, mMenuView.getTop(),</div><div class="line">            menuLeft + mMenuWidth, mMenuView.getBottom());</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>相信如果我没有给出上面的数学关系解答，直接看代码，您可能会一脸懵逼，这也是很多自定义控件源码难读的原因。</p>
+<h2 id="给main加个滑动渐变阴影"><a href="#给main加个滑动渐变阴影" class="headerlink" title="给main加个滑动渐变阴影"></a>给main加个滑动渐变阴影</h2><p>经过上面的操作，感觉总体已经有了模样了，但还缺少一样东西，就是<code>main</code>经过菜单由关闭到完全打开的过程中，会有一层透明到不透明变化的阴影，看下面动图演示：</p>
+<div align="center"><br>    <img src="https://dn-mhke0kuv.qbox.me/818eeb8270fe6ca23852.gif"><br></div>
+
+<p>实现这个功能我们需要知道ViewGroup通过调用其<code>drawChild</code>方法对子view按顺序分别进行绘制，所以在绘制完<code>menu</code>和<code>main</code>后，我们需要绘制一层左边缘随<code>main</code>变化且上边缘、右边缘和下边缘不变的视图，而且这个视图的透明度也会变化。<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">protected</span> <span class="keyword">boolean</span> <span class="title">drawChild</span><span class="params">(Canvas canvas, View child, <span class="keyword">long</span> drawingTime)</span> </span>&#123;</div><div class="line">    <span class="keyword">boolean</span> result = <span class="keyword">super</span>.drawChild(canvas, child, drawingTime);<span class="comment">//完成原有的子view：menu和main的绘制</span></div><div class="line"></div><div class="line">    <span class="keyword">int</span> shadowLeft = mMainView.getLeft();<span class="comment">//阴影左边缘位置</span></div><div class="line">    <span class="keyword">final</span> Paint shadowPaint = <span class="keyword">new</span> Paint();<span class="comment">//阴影画笔</span></div><div class="line">    shadowPaint.setColor(Color.parseColor(<span class="string">"#"</span> + mShadowOpacity + <span class="string">"777777"</span>));<span class="comment">//给画笔设置透明度变化的颜色</span></div><div class="line">    shadowPaint.setStyle(Paint.Style.FILL);<span class="comment">//设置画笔类型填充</span></div><div class="line">    canvas.drawRect(shadowLeft, <span class="number">0</span>, mScreenWidth, mScreenHeight, shadowPaint);<span class="comment">//画出阴影</span></div><div class="line"></div><div class="line">    <span class="keyword">return</span> result;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>其中这个<code>mShadowOpacity</code>是随<code>main</code>的位置变化而变化的：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="keyword">private</span> String mShadowOpacity = <span class="string">"00"</span></div><div class="line"></div><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">onViewPositionChanged</span><span class="params">(View changedView, <span class="keyword">int</span> left, <span class="keyword">int</span> top, <span class="keyword">int</span> dx, <span class="keyword">int</span> dy)</span> </span>&#123;</div><div class="line">    <span class="keyword">float</span> showing = (<span class="keyword">float</span>) (mScreenWidth - left) / (<span class="keyword">float</span>) mScreenWidth;</div><div class="line">    <span class="keyword">int</span> hex = <span class="number">255</span> - Math.round(showing * <span class="number">255</span>);</div><div class="line">    <span class="keyword">if</span> (hex &lt; <span class="number">16</span>) &#123;</div><div class="line">        mShadowOpacity = <span class="string">"0"</span> + Integer.toHexString(hex);</div><div class="line">    &#125; <span class="keyword">else</span> &#123;</div><div class="line">        mShadowOpacity = Integer.toHexString(hex);</div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>至此我们的菜单可以说是完工了，but！</p>
+<h2 id="还需要一些优化"><a href="#还需要一些优化" class="headerlink" title="还需要一些优化"></a>还需要一些优化</h2><p>1.如果打开菜单，熄屏，再亮屏，此时菜单就又恢复到关闭的状态了，因为重新亮屏后，<code>layout</code>方法会重新调用，也就是说我们的子view会重新布局，所以要改写这个方法：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">onLayout</span><span class="params">(<span class="keyword">boolean</span> changed, <span class="keyword">int</span> left, <span class="keyword">int</span> top, <span class="keyword">int</span> right, <span class="keyword">int</span> bottom)</span> </span>&#123;</div><div class="line">    <span class="keyword">super</span>.onLayout(changed, left, top, right, bottom);</div><div class="line">    MarginLayoutParams menuParams = (MarginLayoutParams) mMenuView.getLayoutParams();</div><div class="line">    menuParams.width = mMenuWidth;</div><div class="line">    mMenuView.setLayoutParams(menuParams);</div><div class="line">    <span class="keyword">if</span> (mMenuState == MENU_OPENED) &#123;<span class="comment">//判断菜单的状态为打开的话</span></div><div class="line">        <span class="comment">//保持打开的位置</span></div><div class="line">        mMenuView.layout(<span class="number">0</span>, <span class="number">0</span>, mMenuWidth, bottom);</div><div class="line">        mMainView.layout(mMenuWidth, <span class="number">0</span>, mMenuWidth + mScreenWidth, bottom);</div><div class="line">        <span class="keyword">return</span>;</div><div class="line">    &#125;</div><div class="line">    mMenuView.layout(-mMenuOffset, top, mMenuWidth - mMenuOffset, bottom);</div><div class="line">&#125;</div><div class="line"></div><div class="line"><span class="comment">//获取菜单的状态</span></div><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">computeScroll</span><span class="params">()</span> </span>&#123;</div><div class="line">    <span class="keyword">if</span> (mMainView.getLeft() == <span class="number">0</span>) &#123;</div><div class="line">        mMenuState = MENU_CLOSED;</div><div class="line">    &#125; <span class="keyword">else</span> <span class="keyword">if</span> (mMainView.getLeft() == mMenuWidth) &#123;</div><div class="line">        mMenuState = MENU_OPENED;</div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>2.旋转屏幕也会出现上述的问题，这时就需要调用<code>onSaveInstanceState</code>和<code>onRestoreInstanceState</code>这两个方法分别用来保存和恢复我们菜单的状态。<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="keyword">protected</span> <span class="keyword">static</span> <span class="class"><span class="keyword">class</span> <span class="title">SavedState</span> <span class="keyword">extends</span> <span class="title">AbsSavedState</span> </span>&#123;</div><div class="line">    <span class="keyword">int</span> menuState;<span class="comment">//记录菜单状态的值</span></div><div class="line"></div><div class="line">    SavedState(Parcel in, ClassLoader loader) &#123;</div><div class="line">        <span class="keyword">super</span>(in, loader);</div><div class="line">        menuState = in.readInt();</div><div class="line">    &#125;</div><div class="line"></div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">writeToParcel</span><span class="params">(Parcel dest, <span class="keyword">int</span> flags)</span> </span>&#123;</div><div class="line">        <span class="keyword">super</span>.writeToParcel(dest, flags);</div><div class="line">        dest.writeInt(menuState);</div><div class="line">    &#125;</div><div class="line">    ...</div><div class="line">    ...</div><div class="line">    ...</div><div class="line">&#125;</div><div class="line"></div><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">protected</span> Parcelable <span class="title">onSaveInstanceState</span><span class="params">()</span> </span>&#123;</div><div class="line">    <span class="keyword">final</span> Parcelable superState = <span class="keyword">super</span>.onSaveInstanceState();</div><div class="line">    <span class="keyword">final</span> CoordinatorMenu.SavedState ss = <span class="keyword">new</span> CoordinatorMenu.SavedState(superState);</div><div class="line">    ss.menuState = mMenuState;<span class="comment">//保存状态</span></div><div class="line">    <span class="keyword">return</span> ss;</div><div class="line">&#125;</div><div class="line"></div><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">onRestoreInstanceState</span><span class="params">(Parcelable state)</span> </span>&#123;</div><div class="line">    <span class="keyword">if</span> (!(state <span class="keyword">instanceof</span> CoordinatorMenu.SavedState)) &#123;</div><div class="line">        <span class="keyword">super</span>.onRestoreInstanceState(state);</div><div class="line">        <span class="keyword">return</span>;</div><div class="line">    &#125;</div><div class="line"></div><div class="line">    <span class="keyword">final</span> CoordinatorMenu.SavedState ss = (CoordinatorMenu.SavedState) state;</div><div class="line">    <span class="keyword">super</span>.onRestoreInstanceState(ss.getSuperState());</div><div class="line"></div><div class="line">    <span class="keyword">if</span> (ss.menuState == MENU_OPENED) &#123;<span class="comment">//读取到的状态是打开的话</span></div><div class="line">        openMenu();<span class="comment">//打开菜单</span></div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>2.<strong>避免过度绘制</strong>。<code>menu</code>和<code>main</code>在滑动过程中会有重叠部分，重叠部分也就是<code>menu</code>被遮盖的部分，是不需要再绘制的，我们只需要绘制显示出来的<code>menu</code>部分，如图所示：</p>
+<div align="center"><br>    <img src="https://dn-mhke0kuv.qbox.me/db3ed31c0a16a0584720.png"><br></div>
+
+<p>在<code>drawChild</code>方法中增加以下代码<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"> <span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">protected</span> <span class="keyword">boolean</span> <span class="title">drawChild</span><span class="params">(Canvas canvas, View child, <span class="keyword">long</span> drawingTime)</span> </span>&#123;</div><div class="line">    <span class="keyword">final</span> <span class="keyword">int</span> restoreCount = canvas.save();<span class="comment">//保存画布当前的剪裁信息</span></div><div class="line"></div><div class="line">    <span class="keyword">final</span> <span class="keyword">int</span> height = getHeight();</div><div class="line">    <span class="keyword">final</span> <span class="keyword">int</span> clipLeft = <span class="number">0</span>;</div><div class="line">    <span class="keyword">int</span> clipRight = mMainView.getLeft();</div><div class="line">    <span class="keyword">if</span> (child == mMenuView) &#123;</div><div class="line">        canvas.clipRect(clipLeft, <span class="number">0</span>, clipRight, height);<span class="comment">//剪裁显示的区域</span></div><div class="line">    &#125;</div><div class="line"></div><div class="line">    <span class="keyword">boolean</span> result = <span class="keyword">super</span>.drawChild(canvas, child, drawingTime);<span class="comment">//绘制当前view</span></div><div class="line"></div><div class="line">    <span class="comment">//恢复画布之前保存的剪裁信息</span></div><div class="line">    <span class="comment">//以正常绘制之后的view</span></div><div class="line">    canvas.restoreToCount(restoreCount);</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<h2 id="写在最后"><a href="#写在最后" class="headerlink" title="写在最后"></a>写在最后</h2><p>至此，我们的侧滑菜单即实现了功能，又优化并处理了些细节。如果有时候遇到功能不知道怎么实现，其实最好的解决方向就是先看看官方有没有实现过这样的功能，再去他们的源码里寻找答案，比如说我这里实现的阴影绘制以及过度绘制优化都是参照于官方控件<code>DrawerLayout</code>，阅读官方源码不仅能让你实现功能，还能激发你并改善你的代码质量，会有一种<code>卧槽，代码原来这么写最好了</code>的感叹。</p>
+<blockquote>
+<p>本文源码地址：<a href="https://github.com/bestTao/CoordinatorMenu" target="_blank" rel="external">https://github.com/bestTao/CoordinatorMenu</a>，<strong>有问题欢迎提issue</strong>。</p>
+</blockquote>
+<p><strong>你也可以直接在项目中引入这个控件：</strong></p>
+<ol>
+<li><p>先添加以下代码到你项目中的根目录的<code>build.gradle</code></p>
+<figure class="highlight gradle"><table><tr><td class="code"><pre><div class="line"><span class="keyword">allprojects</span> &#123;</div><div class="line">		<span class="keyword">repositories</span> &#123;</div><div class="line">			...</div><div class="line">			maven &#123; url <span class="string">'https://jitpack.io'</span> &#125;</div><div class="line">		&#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+</li>
+<li><p>再引入依赖即可：</p>
+<figure class="highlight gradle"><table><tr><td class="code"><pre><div class="line"><span class="keyword">dependencies</span> &#123;</div><div class="line">	        <span class="keyword">compile</span> <span class="string">'com.github.bestTao:CoordinatorMenu:v1.0.2'</span></div><div class="line">&#125;</div></pre></td></tr></table></figure>
+</li>
+</ol>
+<p>详细内容及最新版本可以参考<a href="https://github.com/bestTao/CoordinatorMenu/blob/master/README.md" target="_blank" rel="external">[README.md]</a></p>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;p&gt;Android自定义控件并没有什么捷径可走，需要不断得模仿练习才能出师。这其中进行模仿练习的demo的选择是至关重要的，最优选择莫过于官方的控件了，但是官方控件动辄就是几千行代码往往可能容易让人望而却步。本文介绍如何理解并实现Android端的QQ侧滑菜单，300行代码即可
+    
+    </summary>
+    
+    
+      <category term="Android" scheme="https://bestTao.github.io/tags/Android/"/>
+    
+      <category term="自定义控件" scheme="https://bestTao.github.io/tags/%E8%87%AA%E5%AE%9A%E4%B9%89%E6%8E%A7%E4%BB%B6/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>2017,你有什么想法</title>
+    <link href="https://bestTao.github.io/2017/01/01/2017-%E4%BD%A0%E6%9C%89%E4%BB%80%E4%B9%88%E6%83%B3%E6%B3%95/"/>
+    <id>https://bestTao.github.io/2017/01/01/2017-你有什么想法/</id>
+    <published>2017-01-01T06:58:34.000Z</published>
+    <updated>2017-01-01T07:13:00.912Z</updated>
+    
+    <content type="html"><![CDATA[<ol>
+<li>至少读十本书</li>
+<li>让算法和数据结构不再成为自己的瓶颈</li>
+<li>基础的了解下Angularjs2，如果PWA在国内推进的好，再深入</li>
+<li>对于Android，不再是满足于实现功能，而是深入功能背后的原理</li>
+<li>更积极的活跃于开源社区，不哗众取宠，让自己的github项目star数超过100，我认为只要上面几条能做到，这条就不难实现。</li>
+<li>教练，我想搞机器学习~</li>
+</ol>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;ol&gt;
+&lt;li&gt;至少读十本书&lt;/li&gt;
+&lt;li&gt;让算法和数据结构不再成为自己的瓶颈&lt;/li&gt;
+&lt;li&gt;基础的了解下Angularjs2，如果PWA在国内推进的好，再深入&lt;/li&gt;
+&lt;li&gt;对于Android，不再是满足于实现功能，而是深入功能背后的原理&lt;/li&gt;
+&lt;li&gt;更积极
+    
+    </summary>
+    
+    
+  </entry>
+  
+  <entry>
+    <title>《编写可读代码的艺术》--读书笔记</title>
+    <link href="https://bestTao.github.io/2016/12/18/%E3%80%8A%E7%BC%96%E5%86%99%E5%8F%AF%E8%AF%BB%E4%BB%A3%E7%A0%81%E7%9A%84%E8%89%BA%E6%9C%AF%E3%80%8B-%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/"/>
+    <id>https://bestTao.github.io/2016/12/18/《编写可读代码的艺术》-读书笔记/</id>
+    <published>2016-12-18T05:12:44.000Z</published>
+    <updated>2016-12-18T05:16:34.000Z</updated>
+    
+    <content type="html"><![CDATA[<h2 id="代码应当易于理解"><a href="#代码应当易于理解" class="headerlink" title="代码应当易于理解"></a>代码应当易于理解</h2><ul>
+<li>关键思想：代码的写法应当使别人理解它所需的时间最小化</li>
+<li>要把理解代码所需的时间最小化而不是减少代码，比如一条注释尽管增加了代码的长度，但是能让你更快的理解代码</li>
+<li>先从表面改进：<code>起好名字</code>、<code>写好注释</code>、<code>整洁的代码格式</code></li>
+</ul>
+<h3 id="代码命名"><a href="#代码命名" class="headerlink" title="代码命名"></a>代码命名</h3><h4 id="选择专业的词"><a href="#选择专业的词" class="headerlink" title="选择专业的词"></a>选择专业的词</h4><ul>
+<li><code>get</code> 根据情境，用<code>FetchPage()</code>或者<code>DownloadPage()</code>代替<code>getPage()</code></li>
+<li><code>size()</code> 在树中应该用<code>height()</code>表示高度，<code>numNodes()</code>表示节点数，用<code>memoryBytes()</code>表示内存中所占的空间</li>
+</ul>
+<h4 id="找到更有表现力的词"><a href="#找到更有表现力的词" class="headerlink" title="找到更有表现力的词"></a>找到更有表现力的词</h4><table>
+<thead>
+<tr>
+<th>单词</th>
+<th>更多选择</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>send</td>
+<td>deliver、dispatch、 announce、 distribute、route</td>
+</tr>
+<tr>
+<td>find</td>
+<td>search、extract、locate、recover</td>
+</tr>
+<tr>
+<td>start</td>
+<td>launch、create、begin、open</td>
+</tr>
+<tr>
+<td>make</td>
+<td>create、set up、build、generate、compose、add、new</td>
+</tr>
+</tbody>
+</table>
+<h4 id="避免像泛泛的名字"><a href="#避免像泛泛的名字" class="headerlink" title="避免像泛泛的名字"></a>避免像泛泛的名字</h4><ul>
+<li>在需要实际意义表现时，避免使用<code>tmp</code>、<code>retval</code>、<code>foo</code>这样的词</li>
+<li>某些情况使用空泛的名字也有好处，比如说在交换两个变量的时候使用<code>tmp</code>，在循环迭代器中使用<code>i</code>、<code>j</code>、<code>iter</code>，但是在嵌套的循环中，加上有意义的前缀使之更能相互区分</li>
+</ul>
+<h4 id="为名字附带更多的信息"><a href="#为名字附带更多的信息" class="headerlink" title="为名字附带更多的信息"></a>为名字附带更多的信息</h4><ul>
+<li><p>如果一个<code>id</code>是十六进制的，可以命名为<code>hexId</code></p>
+</li>
+<li><p>带单位的值最好附带上单位</p>
+<p>| 函数参数                          | 带单位的参数               |<br>| :—————————- | :——————- |<br>| start(int delay)              | delay –&gt; delay_secs |<br>| createCache(int size)         | size –&gt; size_mb     |<br>| throttleDownload(float limit) | limit –&gt; max_kbps   |<br>| rotate(float angle)           | angle –&gt; degree_cw  |</p>
+</li>
+<li><p>附带额外信息不仅限于单位，比如其他属性：</p>
+<p>| 情形                        | 变量名      | 更好的名字              |<br>| :———————— | ——– | —————— |<br>| 一个“纯文本”格式的代码，需要加密后才能进一步使用 | password | plaintext_password |<br>| 一条用户提供的注释，需要转义之后才能用于显示    | comment  | unescaped_comment  |<br>| 已转化为UTF-8格式的html字节        | html     | html_utf8          |<br>| 以“url方式编码”的输入数据           | data     | data_urlenc        |</p>
+</li>
+</ul>
+<ul>
+<li>匈牙利表示法把每个变量的“类型信息”都写进名字的前缀中，例如<code>pLast</code>代表一个指向最后一个元素的指针（p），个人认为在java中不推荐这种命名方式，因为java这种强类型的语言在编译期就能确定变量的类型</li>
+</ul>
+<h4 id="名字的长度"><a href="#名字的长度" class="headerlink" title="名字的长度"></a>名字的长度</h4><ul>
+<li><p>在小作用域中使用短的名字，相反在大作用域中使用长名字</p>
+</li>
+<li><p>现代编辑器能方便使你键入长名字</p>
+</li>
+<li><p>首字母缩略词和单词缩写应该是大家普遍接受和理解的，例如用doc代替document、str代替string。</p>
+</li>
+<li><p>丢掉没用的词，<code>ConvertToString</code>可以直接写成<code>toString</code>，这样也没有丢失任何信息</p>
+</li>
+<li><p>利用名字的格式来传递含义，java中，例如</p>
+<p>| 情形     | 规则               |<br>| :—– | —————- |<br>| 类名     | 大驼峰命名法           |<br>| 方法、变量名 | 小驼峰命名法           |<br>| 常量名    | 全部大写字母，不同单词下划线分割 |</p>
+</li>
+<li><p>不论代码中采用何种规范，团队或者项目要保持一致</p>
+</li>
+</ul>
+<h4 id="不会误解的名字"><a href="#不会误解的名字" class="headerlink" title="不会误解的名字"></a>不会误解的名字</h4><ul>
+<li>关键思想：要仔细审视名字，“这个名字会被别人误解成其他含义吗”</li>
+</ul>
+<ul>
+<li>当要定一个值的上线或者下限时，max<em>和min</em>是很好的前缀</li>
+<li>对于包含的范围，使用first和last是很好的选择</li>
+<li>对于包含/排除的范围，begin和end是常用的选择</li>
+<li>命名应与使用者的期望相匹配，例如：<code>get*()</code>是个“轻量级访问器”，<code>list.size()</code>应该是一个<em>O(1)</em>复杂度的操作</li>
+<li>很多单词在用来编程时是多义性的，例如filter、length和limit</li>
+</ul>
+<h3 id="美观"><a href="#美观" class="headerlink" title="美观"></a>美观</h3><h4 id="三条原则"><a href="#三条原则" class="headerlink" title="三条原则"></a>三条原则</h4><ul>
+<li>使用一致的布局，让读者很快就习惯这种风格</li>
+<li>让相似的代码看上去相似</li>
+<li>把相关的代码行分组，形成代码块</li>
+</ul>
+<h4 id="美观的重要性"><a href="#美观的重要性" class="headerlink" title="美观的重要性"></a>美观的重要性</h4><ul>
+<li>整洁的代码能让读者花更少的时间理解代码</li>
+</ul>
+<h4 id="提高代码美观"><a href="#提高代码美观" class="headerlink" title="提高代码美观"></a>提高代码美观</h4><ul>
+<li>重新安排换行来保持一致和紧凑</li>
+<li>用方法（函数）来整理不规则的代码</li>
+<li>可以考虑使用列对齐，例如：</li>
+</ul>
+<figure class="highlight python"><table><tr><td class="code"><pre><div class="line"><span class="comment">#Extract POST parameters to local variables</span></div><div class="line">details  = request.POST.get(<span class="string">'details'</span>)</div><div class="line">location = request.POST.get(<span class="string">'location'</span>)</div><div class="line">phone    = request.POST.get(<span class="string">'phone'</span>)</div><div class="line">email    = request.POST.get(<span class="string">'email'</span>)</div><div class="line">url      = request.POST.get(<span class="string">'url'</span>)</div></pre></td></tr></table></figure>
+<ul>
+<li>选一个有意义的顺序，始终如一的使用它</li>
+<li>把声明按块组织起来</li>
+<li>把代码分成有逻辑的<strong>段落</strong>：把相似的想法放在一起并与其他想法分开</li>
+<li><strong>一致的</strong>风格比正确的风格更重要</li>
+</ul>
+<h3 id="注释"><a href="#注释" class="headerlink" title="注释"></a>注释</h3><p>关键思想：注释的目的是尽量帮助读者了解得和作者一样多</p>
+<h4 id="什么不需要注释"><a href="#什么不需要注释" class="headerlink" title="什么不需要注释"></a>什么不需要注释</h4><ul>
+<li>不要为了那些从代码本身就能<strong>快速</strong>推断的事实写注释</li>
+<li>不要为了注释而注释，没有提供比代码本身更多信息的注释要么删除，要么改进</li>
+<li>不要给不好的名字加注释—<strong>应该把名字改好</strong>，<strong>好代码&gt;坏代码+好注释</strong></li>
+</ul>
+<h4 id="什么需要注释"><a href="#什么需要注释" class="headerlink" title="什么需要注释"></a>什么需要注释</h4><ul>
+<li>记录你写代码时重要的想法</li>
+<li>记录对代码有价值的见解，例如：解释代码没法修复的缺陷、代码不整洁的原因</li>
+<li>为代码中的瑕疵写注释，比如有如下几种标记：</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>标记</th>
+<th>通畅的意义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TODO:</td>
+<td>我还没有处理的事情</td>
+</tr>
+<tr>
+<td>FIXME:</td>
+<td>已知的无法运行的代码</td>
+</tr>
+<tr>
+<td>HACK:</td>
+<td>对一个问题不得不采用的比较粗糙的解决方案</td>
+</tr>
+<tr>
+<td>XXX:</td>
+<td>危险！这里有重要的问题</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>给常量加注释，记下决定这个常量值时的想法</li>
+</ul>
+<ul>
+<li><p>站在读者的角度</p>
+<ul>
+<li>考虑读者阅读这段代码时可能出现提问，并将提问的答案写在注释中</li>
+<li>公布可能的陷阱</li>
+<li>编写文件级别的注释，让读者熟悉代码库</li>
+<li>在一个类或者函数内部编写总结性的注释</li>
+</ul>
+</li>
+<li><p>克服“作者心里阻滞”，</p>
+<ul>
+<li>不管心里想什么，先把它写下来</li>
+<li>读一下这段注释，看看有没有什么可以改进的地方</li>
+<li>不断改进</li>
+</ul>
+<p>当你经常写注释，你会发现步骤1所产生的注释会越来越好，就越不需要后面两步了</p>
+</li>
+</ul>
+<h4 id="写出言简意赅的注释"><a href="#写出言简意赅的注释" class="headerlink" title="写出言简意赅的注释"></a>写出言简意赅的注释</h4><ul>
+<li>让注释保持紧凑</li>
+<li>避免使用不明确的代词</li>
+<li>润色粗糙的句子</li>
+<li>精确的描述函数的行为</li>
+<li>对于输入输出，精心挑选一个例子就够了</li>
+<li>声明代码的意图</li>
+<li>“具名”函数的参数，就是用注释标明函数参数的含义，用来解释难以理解的函数参数</li>
+<li>采用信息含量高的词</li>
+</ul>
+<h2 id="简化循环和逻辑"><a href="#简化循环和逻辑" class="headerlink" title="简化循环和逻辑"></a>简化循环和逻辑</h2><h3 id="把控制流变得易读"><a href="#把控制流变得易读" class="headerlink" title="把控制流变得易读"></a>把控制流变得易读</h3><p>关键思想：把条件、循环、以及其他对控制流的改变做的越“自然”越好。让读者不用停下来重读代码。</p>
+<h4 id="条件语句"><a href="#条件语句" class="headerlink" title="条件语句"></a>条件语句</h4><ul>
+<li>条件语句中比较参数的顺序，有以下指导原则：</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>比较的左侧</th>
+<th>比较的右侧</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>“被问询的”表达式，它的值更倾向于不断变化</td>
+<td>用来做比较的表达式，它的值更倾向于常量</td>
+</tr>
+</tbody>
+</table>
+<p>这是和日常语言习惯是一致的，我们会很自然的说：“如果你的年收入至少是10万”</p>
+<ul>
+<li><p>“尤达表示法”：在有些语言中（包括C++和C，不包括Java）为了防止<code>if(obj==NULL)</code>被写成<code>if(obj=NULL)</code>，出现了<code>if(NULL==obj)</code>这样的写法，但是这样不利于理解，与上一条相悖，现代编译器已经能对<code>if(obj=NULL)</code>给出警告，所以这个写法已经过时了。</p>
+</li>
+<li><p>if/else语句块的顺序：</p>
+<ul>
+<li>首先处理正逻辑而不是负逻辑的情况。例如，用<code>if(debug)</code>而不是<code>if(!debug)</code></li>
+<li>先处理掉简单的情况。这种方式可能还会让if和else在屏幕内都可见</li>
+<li>先处理有趣的或者是可疑的情况</li>
+</ul>
+</li>
+<li><p>不要为了减少代码行数而使用<strong>三目运算符</strong>，它只适用于从两个简单的值中作出选择的情况，例如：</p>
+<figure class="highlight c++"><table><tr><td class="code"><pre><div class="line">time_str += (hour &gt;= <span class="number">12</span>) ? <span class="string">"pm"</span> : <span class="string">"am"</span>;</div></pre></td></tr></table></figure>
+</li>
+</ul>
+<p>因为带有复杂逻辑的三目运算符反而增加了代码的阅读时间</p>
+<h4 id="循环"><a href="#循环" class="headerlink" title="循环"></a>循环</h4><ul>
+<li>避免do/while循环，它的continue语句会让人迷惑，while循环相对更加易读。实践中，大多数do/while循环都可以写成while循环</li>
+</ul>
+<h4 id="从函数提前返回"><a href="#从函数提前返回" class="headerlink" title="从函数提前返回"></a>从函数提前返回</h4><ul>
+<li>函数中使用多条<code>return</code>语句是没有问题的</li>
+<li>实现函数结尾的清理代码的更为精细的方式</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>语言</th>
+<th>清理代码的结构化术语</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>C++</td>
+<td>析构函数</td>
+</tr>
+<tr>
+<td>Java、Python</td>
+<td>try finally</td>
+</tr>
+<tr>
+<td>Python</td>
+<td>with</td>
+</tr>
+<tr>
+<td>C#</td>
+<td>using</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>goto语句对程序易读性的破坏</li>
+</ul>
+<h4 id="嵌套"><a href="#嵌套" class="headerlink" title="嵌套"></a>嵌套</h4><ul>
+<li>深层次的嵌套严重影响代码的可读性</li>
+<li>嵌套一开始是很简单的，但是后来的改动会加深嵌套</li>
+<li>通过提早返回来减少嵌套</li>
+<li>减少循环内的嵌套，与提早返回类似的技术是使用continue</li>
+</ul>
+<h4 id="代码流程"><a href="#代码流程" class="headerlink" title="代码流程"></a>代码流程</h4><ul>
+<li>编程语言和库的结构让代码在“幕后运行”，或者让代码难以理解，如：</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>编程结构</th>
+<th>高层次程序流程是如何变得不清晰的</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>线程</td>
+<td>不清楚什么时间执行什么代码</td>
+</tr>
+<tr>
+<td>信号量/中断处理程序</td>
+<td>有些代码随时有可能执行</td>
+</tr>
+<tr>
+<td>异常</td>
+<td>可能会从多个函数调用中向上冒泡一样地执行</td>
+</tr>
+<tr>
+<td>函数指针和匿名函数</td>
+<td>很难知道到底会执行什么代码，因为在编译时还没有决定</td>
+</tr>
+<tr>
+<td>虚方法</td>
+<td>object.virtualMethod()可能会调用一个未知子类的代码</td>
+</tr>
+</tbody>
+</table>
+<h3 id="拆分超长表达式"><a href="#拆分超长表达式" class="headerlink" title="拆分超长表达式"></a>拆分超长表达式</h3><p>关键思想：把超长表达式拆分成更容易理解的小块</p>
+<h4 id="解释变量"><a href="#解释变量" class="headerlink" title="解释变量"></a>解释变量</h4><ul>
+<li>引入一个额外的变量，使之成为一个小一点的<strong>子表达式</strong></li>
+</ul>
+<h4 id="总结变量"><a href="#总结变量" class="headerlink" title="总结变量"></a>总结变量</h4><ul>
+<li>用一个很短的名字来代替一大块代码，会更容易管理和思考</li>
+</ul>
+<h4 id="使用德摩根定理"><a href="#使用德摩根定理" class="headerlink" title="使用德摩根定理"></a>使用德摩根定理</h4><ul>
+<li>分别进行取反、转换与/或，反向操作是提取出“反因子”</li>
+</ul>
+<h4 id="不滥用短路操作"><a href="#不滥用短路操作" class="headerlink" title="不滥用短路操作"></a>不滥用短路操作</h4><ul>
+<li>短路操作虽然可以很智能的运用在某些场景，使之成为条件控制的效果，但是影响代码的理解</li>
+<li>但短路操作在很多情况下也能达到简洁的目的</li>
+</ul>
+<h4 id="拆分巨大的语句"><a href="#拆分巨大的语句" class="headerlink" title="拆分巨大的语句"></a>拆分巨大的语句</h4><ul>
+<li>复杂的逻辑会产生复杂的表达式，表达式复杂会增加代码的阅读难度，解决它需要转换思维，用更优雅的方式</li>
+<li>巨大的语句的拆分需要找到重复的部分，进行简化</li>
+<li>有时需要把问题“反向”或者考虑目标的对立面</li>
+</ul>
+<h3 id="变量的可读性"><a href="#变量的可读性" class="headerlink" title="变量的可读性"></a>变量的可读性</h3><p>主要问题：</p>
+<ul>
+<li>变量越多，就越难全部跟踪它们的动向</li>
+<li>变量的作用域越大，就需要跟踪它的动向越久</li>
+<li>变量改变得越频繁，就越难以跟踪它的当前值</li>
+</ul>
+<h4 id="减少不能改进可读性的变量"><a href="#减少不能改进可读性的变量" class="headerlink" title="减少不能改进可读性的变量"></a>减少不能改进可读性的变量</h4><ul>
+<li>减少没有价值的临时变量，比如<ul>
+<li>没有拆分任何复杂的表达式</li>
+<li>没有做更多的解释</li>
+<li>只用过一次，因此没有压缩任何冗余代码</li>
+</ul>
+</li>
+<li>减少中间结果</li>
+<li>减少控制流变量</li>
+</ul>
+<figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="keyword">while</span>(<span class="comment">/*condition*/</span>&amp;&amp;!done)&#123;</div><div class="line">  <span class="keyword">if</span>(...)&#123;</div><div class="line">    done = <span class="keyword">true</span>;</div><div class="line">    <span class="keyword">continue</span>;</div><div class="line">  &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<p>done就是控制流变量，可以通过更好的运用结构化编程而消除：</p>
+<figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="keyword">while</span>(<span class="comment">/*condition*/</span>)&#123;</div><div class="line">  <span class="keyword">if</span>(...)&#123;</div><div class="line">    <span class="keyword">break</span>;</div><div class="line">  &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<p>当有多个嵌套的循环时，一个<code>break</code>可能不够，通常的解决方案是把代码挪到一个新方法中</p>
+<h4 id="缩小变量的作用域"><a href="#缩小变量的作用域" class="headerlink" title="缩小变量的作用域"></a>缩小变量的作用域</h4><ul>
+<li>避免滥用全局变量</li>
+<li>让你的代码对尽量少的代码行可见</li>
+<li>把定义往下移，变量定义在使用之前即可</li>
+</ul>
+<h4 id="只写一次的变量更好"><a href="#只写一次的变量更好" class="headerlink" title="只写一次的变量更好"></a>只写一次的变量更好</h4><ul>
+<li>那些只设置一次值的变量（或者const、final、常量）使得代码更容易理解</li>
+</ul>
+<ul>
+<li>就算不能让变量只写一次，让变量在较少的地方改动仍有帮助</li>
+<li>操作一个变量的地方越多，越难确定它的当前值</li>
+</ul>
+<h2 id="重新组织代码"><a href="#重新组织代码" class="headerlink" title="重新组织代码"></a>重新组织代码</h2><h3 id="抽取那些与程序主要目的“不相关的子问题”"><a href="#抽取那些与程序主要目的“不相关的子问题”" class="headerlink" title="抽取那些与程序主要目的“不相关的子问题”"></a>抽取那些与程序主要目的“不相关的子问题”</h3><h4 id="积极的发现并抽取出不相关的子逻辑"><a href="#积极的发现并抽取出不相关的子逻辑" class="headerlink" title="积极的发现并抽取出不相关的子逻辑"></a>积极的发现并抽取出不相关的子逻辑</h4><ul>
+<li>理解某个函数或者代码块高层次的目标</li>
+<li>对于每行代码确定它是否为目标而工作</li>
+<li>如果有很多代码行在解决 不相关的子问题，将它抽取到独立的函数中</li>
+</ul>
+<h4 id="什么是“不相关”的子问题"><a href="#什么是“不相关”的子问题" class="headerlink" title="什么是“不相关”的子问题"></a>什么是“不相关”的子问题</h4><ul>
+<li>完全是自包含的，并不知道其他程序是如何使用它的</li>
+<li>纯工具的代码，例如操作字符串、使用哈希表以及读/写文件</li>
+<li>通用的代码库</li>
+</ul>
+<h4 id="优化现有的接口"><a href="#优化现有的接口" class="headerlink" title="优化现有的接口"></a>优化现有的接口</h4><ul>
+<li>永远不要安于使用不理想的接口</li>
+<li>创建自己的包装函数和隐藏接口的粗陋细节</li>
+<li>按需要重塑接口</li>
+</ul>
+<h4 id="过犹不及"><a href="#过犹不及" class="headerlink" title="过犹不及"></a>过犹不及</h4><ul>
+<li>更多的小函数意味着更多的东西需要关注</li>
+<li>不要为了抽取而抽取</li>
+</ul>
+<h3 id="代码应当一次只做一件事情"><a href="#代码应当一次只做一件事情" class="headerlink" title="代码应当一次只做一件事情"></a>代码应当一次只做一件事情</h3><p>相当于一个函数应该只做一件事情，但是一个函数也可以用空白行区分不同的事情，来达到逻辑上的清晰</p>
+<h4 id="列出任务"><a href="#列出任务" class="headerlink" title="列出任务"></a>列出任务</h4><ul>
+<li>将所有任务列出来，其中一些任务可以很容易地编程单独的函数（或类）</li>
+<li>难点在于准确描述列出的所有的小任务</li>
+</ul>
+<h4 id="分割任务"><a href="#分割任务" class="headerlink" title="分割任务"></a>分割任务</h4><ul>
+<li>分开解决任务使代码变得更小</li>
+</ul>
+<h3 id="把想法变成代码"><a href="#把想法变成代码" class="headerlink" title="把想法变成代码"></a>把想法变成代码</h3><h4 id="方法"><a href="#方法" class="headerlink" title="方法"></a>方法</h4><ul>
+<li>用自然语言描述程序</li>
+<li>用这个描述来帮助你写出更自然的代码</li>
+</ul>
+<h4 id="用自然语言说事情"><a href="#用自然语言说事情" class="headerlink" title="用自然语言说事情"></a>用自然语言说事情</h4><ul>
+<li>“小黄鸭法”解决所遇到的代码问题</li>
+<li>如果你不能把问题说明白或者用词语来设计，估计是缺少了什么东西或者什么东西缺少定义</li>
+</ul>
+<h3 id="少写代码"><a href="#少写代码" class="headerlink" title="少写代码"></a>少写代码</h3><ul>
+<li>重用库或者减少功能，可以节省时间并且让代码库保持精简节约</li>
+<li>最好读的代码就是没有代码</li>
+</ul>
+<h4 id="不去费时间实现不需要的功能"><a href="#不去费时间实现不需要的功能" class="headerlink" title="不去费时间实现不需要的功能"></a>不去费时间实现不需要的功能</h4><ul>
+<li>没用的功能尽管很酷，但会让程序更复杂</li>
+</ul>
+<h4 id="质疑和拆分需求"><a href="#质疑和拆分需求" class="headerlink" title="质疑和拆分需求"></a>质疑和拆分需求</h4><ul>
+<li>从项目中消除不必要的功能，不要过度设计</li>
+<li>重新考虑需求，解决版本最简单的问题，只要完成工作就行</li>
+</ul>
+<h4 id="让你的代码库越小，越轻量级越好"><a href="#让你的代码库越小，越轻量级越好" class="headerlink" title="让你的代码库越小，越轻量级越好"></a>让你的代码库越小，越轻量级越好</h4><ul>
+<li>创建越多越好的“工具”以减少重复代码</li>
+<li>减少无用代码或者没有用的功能</li>
+<li>是项目中的子项目解耦</li>
+<li>保持代码的轻量级</li>
+</ul>
+<h4 id="保持对标准库的API的熟悉，尽量使用标准库解决现实问题"><a href="#保持对标准库的API的熟悉，尽量使用标准库解决现实问题" class="headerlink" title="保持对标准库的API的熟悉，尽量使用标准库解决现实问题"></a>保持对标准库的API的熟悉，尽量使用标准库解决现实问题</h4>]]></content>
+    
+    <summary type="html">
+    
+      &lt;h2 id=&quot;代码应当易于理解&quot;&gt;&lt;a href=&quot;#代码应当易于理解&quot; class=&quot;headerlink&quot; title=&quot;代码应当易于理解&quot;&gt;&lt;/a&gt;代码应当易于理解&lt;/h2&gt;&lt;ul&gt;
+&lt;li&gt;关键思想：代码的写法应当使别人理解它所需的时间最小化&lt;/li&gt;
+&lt;li&gt;要把理解
+    
+    </summary>
+    
+    
+      <category term="阅读" scheme="https://bestTao.github.io/tags/%E9%98%85%E8%AF%BB/"/>
+    
+      <category term="读书笔记" scheme="https://bestTao.github.io/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>[译]动画矢量图(简单几步就能动起来)</title>
+    <link href="https://bestTao.github.io/2016/11/30/%5B%E8%AF%91%5D%E5%8A%A8%E7%94%BB%E7%9F%A2%E9%87%8F%E5%9B%BE(%E7%AE%80%E5%8D%95%E5%87%A0%E6%AD%A5%E5%B0%B1%E8%83%BD%E5%8A%A8%E8%B5%B7%E6%9D%A5)/"/>
+    <id>https://bestTao.github.io/2016/11/30/[译]动画矢量图(简单几步就能动起来)/</id>
+    <published>2016-11-30T13:06:50.000Z</published>
+    <updated>2016-11-30T13:22:36.000Z</updated>
+    
+    <content type="html"><![CDATA[<div style="text-align: center"><br><img src="https://d262ilb51hltx0.cloudfront.net/max/800/1*XI72aAgZON-g0F_Teo6kiA.gif"><br></div>
+
+<p>　　尽管<code>AnimatedVectorDrawableCompat</code>（自从2016年二月份–Support Library 23.2.0）已经出来有一段时间了，Google官方却一直没有提供一份使用教程。你很难搜到相关可靠的文章，也没有什么能把这个东西完完整整的呈现出来。<br>　　所以接下来我尝试将所有必要知识精简成你所能理解的东西。</p>
+<hr>
+<h2 id="你需要做的事："><a href="#你需要做的事：" class="headerlink" title="你需要做的事："></a>你需要做的事：</h2><h3 id="1-在你的build-gradle文件中添加AppCompat依赖"><a href="#1-在你的build-gradle文件中添加AppCompat依赖" class="headerlink" title="1.在你的build.gradle文件中添加AppCompat依赖"></a>1.在你的build.gradle文件中添加AppCompat依赖</h3><figure class="highlight gradle"><table><tr><td class="code"><pre><div class="line"><span class="keyword">compile</span> <span class="string">'com.android.support:appcompat-v7:25.0.0'</span></div></pre></td></tr></table></figure>
+<ul>
+<li>我使用了（此时）最新版本<code>25.0.0</code>，但是只要从<code>23.2.0</code>开始任何版本可以正常工作</li>
+</ul>
+<h3 id="2-创建vector-drawable（矢量图）文件"><a href="#2-创建vector-drawable（矢量图）文件" class="headerlink" title="2.创建vector drawable（矢量图）文件"></a>2.创建vector drawable（矢量图）文件</h3><ul>
+<li>它能被赋予动画效果</li>
+<li><code>vector</code>drawable文件必须被放在你项目的res/drawable文件夹</li>
+<li>更多的相关内容点<a href="https://developer.android.com/reference/android/graphics/drawable/VectorDrawable.html" target="_blank" rel="external">这里</a>（译注：官方文档需科学上网）<figure class="highlight xml"><table><tr><td class="code"><pre><div class="line">&lt;?xml version="1.0" encoding="utf-8"?&gt;</div><div class="line"><span class="tag">&lt;<span class="name">vector</span></span></div><div class="line">    <span class="attr">xmlns:android</span>=<span class="string">"http://schemas.android.com/apk/res/android"</span></div><div class="line">    <span class="attr">android:width</span>=<span class="string">"24dp"</span></div><div class="line">    <span class="attr">android:height</span>=<span class="string">"24dp"</span></div><div class="line">    <span class="attr">android:viewportHeight</span>=<span class="string">"24"</span></div><div class="line">    <span class="attr">android:viewportWidth</span>=<span class="string">"24"</span>&gt;</div><div class="line">    <span class="tag">&lt;<span class="name">group</span></span></div><div class="line">        <span class="attr">android:name</span>=<span class="string">"menu"</span></div><div class="line">        <span class="attr">android:pivotX</span>=<span class="string">"12"</span></div><div class="line">        <span class="attr">android:pivotY</span>=<span class="string">"12"</span>&gt;</div><div class="line">        <span class="tag">&lt;<span class="name">group</span></span></div><div class="line">            <span class="attr">android:name</span>=<span class="string">"bottom_container"</span></div><div class="line">            <span class="attr">android:pivotX</span>=<span class="string">"20"</span></div><div class="line">            <span class="attr">android:pivotY</span>=<span class="string">"17"</span>&gt;</div><div class="line">            <span class="tag">&lt;<span class="name">path</span></span></div><div class="line">                <span class="attr">android:name</span>=<span class="string">"bottom"</span></div><div class="line">                <span class="attr">android:pathData</span>=<span class="string">"M4,17,L20,17"</span></div><div class="line">                <span class="attr">android:strokeColor</span>=<span class="string">"#000"</span></div><div class="line">                <span class="attr">android:strokeLineCap</span>=<span class="string">"square"</span></div><div class="line">                <span class="attr">android:strokeLineJoin</span>=<span class="string">"miter"</span></div><div class="line">                <span class="attr">android:strokeMiterLimit</span>=<span class="string">"10"</span></div><div class="line">                <span class="attr">android:strokeWidth</span>=<span class="string">"2"</span>/&gt;</div><div class="line">        <span class="tag">&lt;/<span class="name">group</span>&gt;</span></div><div class="line">        <span class="tag">&lt;<span class="name">group</span></span></div><div class="line">            <span class="attr">android:name</span>=<span class="string">"stem_container"</span></div><div class="line">            <span class="attr">android:pivotX</span>=<span class="string">"12"</span></div><div class="line">            <span class="attr">android:pivotY</span>=<span class="string">"12"</span>&gt;</div><div class="line">            <span class="tag">&lt;<span class="name">path</span></span></div><div class="line">                <span class="attr">android:name</span>=<span class="string">"stem"</span></div><div class="line">                <span class="attr">android:pathData</span>=<span class="string">"M4,12,L20,12"</span></div><div class="line">                <span class="attr">android:strokeColor</span>=<span class="string">"#000"</span></div><div class="line">                <span class="attr">android:strokeLineCap</span>=<span class="string">"square"</span></div><div class="line">                <span class="attr">android:strokeLineJoin</span>=<span class="string">"miter"</span></div><div class="line">                <span class="attr">android:strokeMiterLimit</span>=<span class="string">"10"</span></div><div class="line">                <span class="attr">android:strokeWidth</span>=<span class="string">"2"</span>/&gt;</div><div class="line">        <span class="tag">&lt;/<span class="name">group</span>&gt;</span></div><div class="line">        <span class="tag">&lt;<span class="name">group</span></span></div><div class="line">            <span class="attr">android:name</span>=<span class="string">"top_container"</span></div><div class="line">            <span class="attr">android:pivotX</span>=<span class="string">"20"</span></div><div class="line">            <span class="attr">android:pivotY</span>=<span class="string">"7"</span>&gt;</div><div class="line">            <span class="tag">&lt;<span class="name">path</span></span></div><div class="line">                <span class="attr">android:name</span>=<span class="string">"top"</span></div><div class="line">                <span class="attr">android:pathData</span>=<span class="string">"M4,7,L20,7"</span></div><div class="line">                <span class="attr">android:strokeColor</span>=<span class="string">"#000"</span></div><div class="line">                <span class="attr">android:strokeLineCap</span>=<span class="string">"square"</span></div><div class="line">                <span class="attr">android:strokeLineJoin</span>=<span class="string">"miter"</span></div><div class="line">                <span class="attr">android:strokeMiterLimit</span>=<span class="string">"10"</span></div><div class="line">                <span class="attr">android:strokeWidth</span>=<span class="string">"2"</span>/&gt;</div><div class="line">        <span class="tag">&lt;/<span class="name">group</span>&gt;</span></div><div class="line">    <span class="tag">&lt;/<span class="name">group</span>&gt;</span></div><div class="line"><span class="tag">&lt;/<span class="name">vector</span>&gt;</span></div></pre></td></tr></table></figure>
+</li>
+</ul>
+<p>上面的代码描绘的是一个基础的黑色菜单（汉堡包）图标：</p>
+<div style="text-align: center"><br><img src="https://d262ilb51hltx0.cloudfront.net/max/800/1*c5OuwdtbvYgz23ZYNOqvyQ.png"><br></div>
+
+<h3 id="3-创建动画文件"><a href="#3-创建动画文件" class="headerlink" title="3.创建动画文件"></a>3.创建动画文件</h3><ul>
+<li>它们指定了<code>vector</code>的动画部分</li>
+<li>可以将多个动画分别指定给一个<code>vector</code>drawable的不同的部分</li>
+<li><code>vector</code>不同的部分用<code>name</code>标签指定（例如<code>menu</code>, <code>bottom_container</code>, <code>bottom</code>, <code>stem_container</code>, <code>stem</code>, <code>top_container</code>, <code>top</code>）</li>
+<li>动画文件根元素既可以是<code>set</code>也可以是<code>objectAnimator</code></li>
+<li>这些文件需要放在res/anim目录下</li>
+</ul>
+<p>　　接下来的代码展现了<code>top_container</code>动画，它定义了四个属性，<code>translateX</code>，<code>translateY</code>，<code>scaleX</code>以及<code>rotation</code>:<br><figure class="highlight xml"><table><tr><td class="code"><pre><div class="line">&lt;?xml version="1.0" encoding="utf-8"?&gt;</div><div class="line"><span class="tag">&lt;<span class="name">set</span> <span class="attr">xmlns:android</span>=<span class="string">"http://schemas.android.com/apk/res/android"</span>&gt;</span></div><div class="line">    <span class="tag">&lt;<span class="name">objectAnimator</span></span></div><div class="line">        <span class="attr">android:name</span>=<span class="string">"top_container"</span></div><div class="line">        <span class="attr">android:duration</span>=<span class="string">"700"</span></div><div class="line">        <span class="attr">android:interpolator</span>=<span class="string">"@android:anim/accelerate_decelerate_interpolator"</span></div><div class="line">        <span class="attr">android:propertyName</span>=<span class="string">"translateX"</span></div><div class="line">        <span class="attr">android:startOffset</span>=<span class="string">"500"</span></div><div class="line">        <span class="attr">android:valueFrom</span>=<span class="string">"0"</span></div><div class="line">        <span class="attr">android:valueTo</span>=<span class="string">"-1.41421356"</span></div><div class="line">        <span class="attr">android:valueType</span>=<span class="string">"floatType"</span>/&gt;</div><div class="line">    <span class="tag">&lt;<span class="name">objectAnimator</span></span></div><div class="line">        <span class="attr">android:name</span>=<span class="string">"top_container"</span></div><div class="line">        <span class="attr">android:duration</span>=<span class="string">"700"</span></div><div class="line">        <span class="attr">android:interpolator</span>=<span class="string">"@android:anim/accelerate_decelerate_interpolator"</span></div><div class="line">        <span class="attr">android:propertyName</span>=<span class="string">"translateY"</span></div><div class="line">        <span class="attr">android:startOffset</span>=<span class="string">"500"</span></div><div class="line">        <span class="attr">android:valueFrom</span>=<span class="string">"0"</span></div><div class="line">        <span class="attr">android:valueTo</span>=<span class="string">"5"</span></div><div class="line">        <span class="attr">android:valueType</span>=<span class="string">"floatType"</span>/&gt;</div><div class="line">    <span class="tag">&lt;<span class="name">objectAnimator</span></span></div><div class="line">        <span class="attr">android:name</span>=<span class="string">"top_container"</span></div><div class="line">        <span class="attr">android:duration</span>=<span class="string">"700"</span></div><div class="line">        <span class="attr">android:interpolator</span>=<span class="string">"@android:anim/accelerate_decelerate_interpolator"</span></div><div class="line">        <span class="attr">android:propertyName</span>=<span class="string">"scaleX"</span></div><div class="line">        <span class="attr">android:startOffset</span>=<span class="string">"500"</span></div><div class="line">        <span class="attr">android:valueFrom</span>=<span class="string">"1"</span></div><div class="line">        <span class="attr">android:valueTo</span>=<span class="string">"0.5"</span></div><div class="line">        <span class="attr">android:valueType</span>=<span class="string">"floatType"</span>/&gt;</div><div class="line">    <span class="tag">&lt;<span class="name">objectAnimator</span></span></div><div class="line">        <span class="attr">android:name</span>=<span class="string">"top_container"</span></div><div class="line">        <span class="attr">android:duration</span>=<span class="string">"700"</span></div><div class="line">        <span class="attr">android:interpolator</span>=<span class="string">"@android:anim/accelerate_decelerate_interpolator"</span></div><div class="line">        <span class="attr">android:propertyName</span>=<span class="string">"rotation"</span></div><div class="line">        <span class="attr">android:startOffset</span>=<span class="string">"500"</span></div><div class="line">        <span class="attr">android:valueFrom</span>=<span class="string">"0"</span></div><div class="line">        <span class="attr">android:valueTo</span>=<span class="string">"45"</span></div><div class="line">        <span class="attr">android:valueType</span>=<span class="string">"floatType"</span>/&gt;</div><div class="line"><span class="tag">&lt;/<span class="name">set</span>&gt;</span></div></pre></td></tr></table></figure></p>
+<div style="text-align: center"><br><img src="https://d262ilb51hltx0.cloudfront.net/max/800/1*1Wedbml-isruH21ZwFJ5oA.gif"><br></div>
+
+<h3 id="4-创建animate-vector-drawable文件"><a href="#4-创建animate-vector-drawable文件" class="headerlink" title="4.创建animate-vector drawable文件"></a>4.创建animate-vector drawable文件</h3><ul>
+<li><code>animated-vector</code>将所有的内容都联系在一起（<code>vector</code>drawable文件和所有的<code>animation</code>文件）</li>
+<li>需要将它放在你项目的res/anim目录下</li>
+</ul>
+<figure class="highlight xml"><table><tr><td class="code"><pre><div class="line">&lt;?xml version="1.0" encoding="utf-8"?&gt;</div><div class="line"><span class="tag">&lt;<span class="name">animated-vector</span></span></div><div class="line">    <span class="attr">xmlns:android</span>=<span class="string">"http://schemas.android.com/apk/res/android"</span></div><div class="line">    <span class="attr">xmlns:tools</span>=<span class="string">"http://schemas.android.com/tools"</span></div><div class="line">    <span class="attr">android:drawable</span>=<span class="string">"@drawable/vector_menu_back"</span></div><div class="line">    <span class="attr">tools:ignore</span>=<span class="string">"NewApi"</span>&gt;</div><div class="line"></div><div class="line">    <span class="tag">&lt;<span class="name">target</span></span></div><div class="line">        <span class="attr">android:name</span>=<span class="string">"top_container"</span></div><div class="line">        <span class="attr">android:animation</span>=<span class="string">"@anim/anim_top_container"</span>/&gt;</div><div class="line">    <span class="tag">&lt;<span class="name">target</span></span></div><div class="line">        <span class="attr">android:name</span>=<span class="string">"stem_container"</span></div><div class="line">        <span class="attr">android:animation</span>=<span class="string">"@anim/anim_stem_container"</span>/&gt;</div><div class="line">    <span class="tag">&lt;<span class="name">target</span></span></div><div class="line">        <span class="attr">android:name</span>=<span class="string">"bottom_container"</span></div><div class="line">        <span class="attr">android:animation</span>=<span class="string">"@anim/anim_bottom_container"</span>/&gt;</div><div class="line">    <span class="tag">&lt;<span class="name">target</span></span></div><div class="line">        <span class="attr">android:name</span>=<span class="string">"menu"</span></div><div class="line">        <span class="attr">android:animation</span>=<span class="string">"@anim/anim_menu"</span>/&gt;</div><div class="line"></div><div class="line"><span class="tag">&lt;/<span class="name">animated-vector</span>&gt;</span></div></pre></td></tr></table></figure>
+<p><strong>需要注意的是：</strong></p>
+<blockquote>
+<p>如果你的<code>minSdkVersion</code>小于21（如果大于的话，那我真的不知道你为什么会考虑用<code>AnimatedVectorDrawableCompat</code>…正常用<code>AnimatedVectorDrawable</code>就行了），Android Studio可能会在你的<code>animated-vector</code>文件中弹出一个静态检查警告：</p>
+</blockquote>
+<div style="text-align: center"><br><img src="https://d262ilb51hltx0.cloudfront.net/max/1000/1*mJ7exvw2h7RNyYLJkjljQA.png"><br></div>
+
+<blockquote>
+<p>不要担心这个警告！如果你的代码没有错误，你的<code>AnimatedVectorDrawableCompat</code>会忽略掉它并且能够正常工作。当然如果你不想再看到警告，可以添加<code>tools:ignore=&quot;NewApi&quot;</code>：</p>
+</blockquote>
+<div style="text-align: center"><br><img src="https://d262ilb51hltx0.cloudfront.net/max/1000/1*y83fxWXo_Vzp73U0fiynng.png"><br></div>
+
+<h3 id="5-编辑你的build-gradle文件"><a href="#5-编辑你的build-gradle文件" class="headerlink" title="5.编辑你的build.gradle文件"></a>5.编辑你的build.gradle文件</h3><ul>
+<li>在你的<code>build.gradle</code>文件中，将<code>vectorDrawables.useSupportLibrary = true</code>添加进<code>android</code>部分的<code>defaultConfig</code>内</li>
+<li>你需要这行代码，这样你的<code>animated-vector</code>才能兼容API小于 Lollipop版本的系统</li>
+</ul>
+<figure class="highlight gradle"><table><tr><td class="code"><pre><div class="line">android &#123;</div><div class="line">    compileSdkVersion <span class="number">24</span></div><div class="line">    buildToolsVersion <span class="string">"24.0.3"</span></div><div class="line">    defaultConfig &#123;</div><div class="line">        applicationId <span class="string">"com.junyuan.wukongnew"</span></div><div class="line">        minSdkVersion <span class="number">21</span></div><div class="line">        targetSdkVersion <span class="number">24</span></div><div class="line">        versionCode <span class="number">1</span></div><div class="line">        versionName <span class="string">"1.0"</span></div><div class="line">        vectorDrawables.useSupportLibrary = <span class="keyword">true</span></div><div class="line">    &#125;</div><div class="line">	...</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<h3 id="6-将你的AnimatedVectorDrawableCompat设置到ImageView或者ImageButton"><a href="#6-将你的AnimatedVectorDrawableCompat设置到ImageView或者ImageButton" class="headerlink" title="6.将你的AnimatedVectorDrawableCompat设置到ImageView或者ImageButton"></a>6.将你的AnimatedVectorDrawableCompat设置到ImageView或者ImageButton</h3><ul>
+<li>你可以用<code>app:srcCompat</code>把它添加进xml文件</li>
+</ul>
+<figure class="highlight xml"><table><tr><td class="code"><pre><div class="line"><span class="tag">&lt;<span class="name">ImageView</span></span></div><div class="line">        <span class="attr">android:id</span>=<span class="string">"@+id/iv_animated"</span></div><div class="line">        <span class="attr">android:layout_width</span>=<span class="string">"48dp"</span></div><div class="line">        <span class="attr">android:layout_height</span>=<span class="string">"48dp"</span></div><div class="line">        <span class="attr">app:srcCompat</span>=<span class="string">"@drawable/animated_vector_menu_back"</span>/&gt;</div></pre></td></tr></table></figure>
+<ul>
+<li>或者通过java代码：</li>
+</ul>
+<figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="keyword">final</span> AnimatedVectorDrawableCompat avd = AnimatedVectorDrawableCompat.create(<span class="keyword">this</span>, R.drawable.animated_vector_menu_back);</div><div class="line">        animatedIv.setImageDrawable(avd);</div></pre></td></tr></table></figure>
+<h3 id="7-在你需要的时候开启动画"><a href="#7-在你需要的时候开启动画" class="headerlink" title="7.在你需要的时候开启动画"></a>7.在你需要的时候开启动画</h3><ul>
+<li>获得<code>AnimatedVectorDrawableCompat</code>的引用（或者是它的一个实现类–<code>Animatable</code>），如果你的<code>AnimatedVectorDrawableCompat</code>是通过java代码添加的，可以直接使用这个对象的引用（你可以跳过这步）：</li>
+</ul>
+<figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="keyword">final</span> Animatable animatable = (Animatable) animatedIv.getDrawable();</div></pre></td></tr></table></figure>
+<ul>
+<li>开启动画</li>
+</ul>
+<figure class="highlight java"><table><tr><td class="code"><pre><div class="line">animatable.start()</div></pre></td></tr></table></figure>
+<div style="text-align: center"><br><img src="https://d262ilb51hltx0.cloudfront.net/max/800/1*0jHCR61TzjHSrNIoqLsFjQ.gif"><br></div>
+
+<hr>
+<h2 id="好消息和坏消息"><a href="#好消息和坏消息" class="headerlink" title="好消息和坏消息"></a>好消息和坏消息</h2><p><strong>让我们先来听听好消息：</strong><br>　　你可以很轻松通过<a href="https://medium.com/u/90c74515fd18" target="_blank" rel="external">Roman Nurik</a>的<a href="https://romannurik.github.io/AndroidIconAnimator/" target="_blank" rel="external">AndroidIconAnimator</a>这个工具（尽管当前它是预览版，但是也足够有用了）实现步骤1-3。它可以将svg文件和你所指定的动画元素转换成<code>animated-vector</code>drawable文件<br>　　有一件很有意思的事情是导出来的来的<code>animated-vector</code>文件使用了<code>aapt</code>工具的一些非常厉害的功能，导出来的drawable文件包含了全部动画所需的代码（包括<code>vector</code>drawable和<code>animation</code>文件）。就是将步骤1-3的所有文件都包含在一个文件里。</p>
+<p><strong>坏消息来了：</strong><br>　　<code>AnimatedVectorDrawableCompat</code>在API小于21时有一些限制:<br>　　<a href="https://medium.com/u/9303277cb6db" target="_blank" rel="external">Chris Banes</a>的<a href="https://medium.com/@chrisbanes/appcompat-v23-2-age-of-the-vectors-91cbafa87c88#.cs1imeq9e" target="_blank" rel="external">文章</a>中指出：</p>
+<blockquote>
+<p>animate vectors 在API小于21的平台上工作时同样有一些限制，当前在这些平台上有一下这几点限制：</p>
+<p>路径绘制（PathType evaluator），这被用来从一个路径绘制到另一个路径</p>
+<p>路径插值器，这被用来定义一个灵活的插值器（展现成一个路径）以代替系统自动生成的，比如说线性插值器（LinearInterpolator）</p>
+<p>按路径移动，这很少能用到，几何图形能在限制路径上来回运动</p>
+</blockquote>
+<p>　　大致意思就是你可以忘了<code>pathData</code>元素的动画<code>pathData</code>，我们只能期望谷歌的天才们能研究一个方法将这个功能兼容到低版本的系统上去。</p>
+<hr>
+<h2 id="更多"><a href="#更多" class="headerlink" title="更多"></a>更多</h2><p>　　似乎这里有个小bug（除非这是它的特点），如果你尝试通过给<code>animated-vector</code>添加<code>startOffset</code>至你的动画，你的动画将根本不能运行起来（至少它在我这不行），它会从开始状态跳到结束状态（带有一些延迟），在所有的<code>animated-vector</code>中至少得有一个动画需要从开始状态运行。这是需要注意的。。。</p>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;div style=&quot;text-align: center&quot;&gt;&lt;br&gt;&lt;img src=&quot;https://d262ilb51hltx0.cloudfront.net/max/800/1*XI72aAgZON-g0F_Teo6kiA.gif&quot;&gt;&lt;br&gt;&lt;/div&gt;
+
+&lt;p&gt;　　尽
+    
+    </summary>
+    
+    
+      <category term="Android" scheme="https://bestTao.github.io/tags/Android/"/>
+    
+      <category term="动画" scheme="https://bestTao.github.io/tags/%E5%8A%A8%E7%94%BB/"/>
+    
+      <category term="矢量图" scheme="https://bestTao.github.io/tags/%E7%9F%A2%E9%87%8F%E5%9B%BE/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>使用RxJava帮助低功耗蓝牙(BLE)进行通信</title>
+    <link href="https://bestTao.github.io/2016/11/25/%E4%BD%BF%E7%94%A8RxJava%E5%B8%AE%E5%8A%A9%E4%BD%8E%E5%8A%9F%E8%80%97%E8%93%9D%E7%89%99(BLE)%E8%BF%9B%E8%A1%8C%E9%80%9A%E4%BF%A1/"/>
+    <id>https://bestTao.github.io/2016/11/25/使用RxJava帮助低功耗蓝牙(BLE)进行通信/</id>
+    <published>2016-11-25T11:54:50.000Z</published>
+    <updated>2016-11-27T08:39:28.000Z</updated>
+    
+    <content type="html"><![CDATA[<blockquote>
+<p>本文同步于我的<a href="http://gold.xitu.io/user/576274a82e958a005807b1ae" target="_blank" rel="external">掘金专栏</a><br>本文的代码地址：<a href="https://github.com/bestTao/RxBleDemo" target="_blank" rel="external">RxBleDemo</a><br>关于RxJava，如果你还不了解，可以看<a href="http://gank.io/post/560e15be2dca930e00da1083" target="_blank" rel="external">给 Android 开发者的 RxJava 详解</a><br>关于低功耗蓝牙的开发你可以看<a href="https://developer.android.com/guide/topics/connectivity/bluetooth-le.html" target="_blank" rel="external">官方文档</a>或者直接阅读本文</p>
+</blockquote>
+<div style="text-align: center"><br><img src="http://oflybvyqn.bkt.clouddn.com/blog/img/Bluetooth_headset.jpg"><br></div>
+
+<p>　　Android中的蓝牙开发有两种，一种是传统蓝牙，另一种是低功耗蓝牙，这两者完全不一样，开发前你得弄清你需要开发的是哪一种，用传统蓝牙的方式进行低功耗蓝牙的开发你可能都没法使你的设备连上蓝牙，不要问我为什么知道，说多了都是泪 (TT)<br>　　低功耗蓝牙（Bluetooth Low Energy）简称BLE，常见于各种运动手环、电子血压计等健康管理设备，Android4.3（API级别18）中引入了面向低功耗蓝牙的API支持。也就是说开发的前提是手机设备支持BLE并且系统是Android4.3以上，与手机通信的蓝牙设备是低功耗蓝牙。<br>　　如果你看了<a href="https://developer.android.com/guide/topics/connectivity/bluetooth-le.html" target="_blank" rel="external">官方文档</a>上的示例，你会发现使用了Handler、和广播进行异步通信，之前我在司项目中蓝牙功能也是这么写的，现在有了RxJava，我们可以写的更优(zhaung)雅(bi)些，所以就有了这篇文章。</p>
+<h1 id="整体思路"><a href="#整体思路" class="headerlink" title="整体思路"></a>整体思路</h1><p>　　假定你已经有了一部支持BLE的手机和一个可以通信的低功耗蓝牙模块，那么就可以按下面的步骤开搞了：</p>
+<ul>
+<li>蓝牙权限</li>
+<li>设置并开启手机蓝牙</li>
+<li>查找蓝牙设备</li>
+<li>连接蓝牙服务</li>
+<li>进行蓝牙通信</li>
+</ul>
+<h1 id="详细步骤"><a href="#详细步骤" class="headerlink" title="详细步骤"></a>详细步骤</h1><h2 id="设置蓝牙权限"><a href="#设置蓝牙权限" class="headerlink" title="设置蓝牙权限"></a>设置蓝牙权限</h2><p>　　在应用中的manifest文件中声明蓝牙权限<br><figure class="highlight xml"><table><tr><td class="code"><pre><div class="line"><span class="tag">&lt;<span class="name">uses-permission</span> <span class="attr">android:name</span>=<span class="string">"android.permission.BLUETOOTH"</span>/&gt;</span>  </div><div class="line"><span class="tag">&lt;<span class="name">uses-permission</span> <span class="attr">android:name</span>=<span class="string">"android.permission.BLUETOOTH_ADMIN"</span>/&gt;</span></div></pre></td></tr></table></figure></p>
+<p>　　另外我们可以通过<code>PackageManager.hasSystemFeature()</code>方法来判断当前的手机设备是否支持BLE。</p>
+<h2 id="设置并开启手机蓝牙设备"><a href="#设置并开启手机蓝牙设备" class="headerlink" title="设置并开启手机蓝牙设备"></a>设置并开启手机蓝牙设备</h2><p>　　首先通过<code>BluetoothManager</code>获取手机中唯一的的蓝牙适配器(蓝牙发送接收器)<code>BluetoothAdapter</code>对象。再通过<code>BluetoothAdapter</code>开启手机蓝牙设备，代码如下：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">initBle</span><span class="params">(Context context)</span> </span>&#123;</div><div class="line">        <span class="keyword">this</span>.mContext = context.getApplicationContext();</div><div class="line">        BluetoothManager bluetoothManager =</div><div class="line">                (BluetoothManager) <span class="keyword">this</span>.mContext.getSystemService(Context.BLUETOOTH_SERVICE);</div><div class="line">        mBleAdapter = bluetoothManager.getAdapter();</div><div class="line">        <span class="keyword">if</span> (mBleAdapter != <span class="keyword">null</span>) &#123;</div><div class="line">            mBleAdapter.enable();<span class="comment">//不弹对话框直接开启蓝牙</span></div><div class="line">        &#125;</div><div class="line">    &#125;</div></pre></td></tr></table></figure></p>
+<p>　　值得一提的是我将蓝牙功能简单的封装成了一个工具类，用到了静态内部类的单例模式，为了防止内存泄露，在初始化蓝牙的时候传入了Application的Context对象的引用</p>
+<h2 id="查找蓝牙设备"><a href="#查找蓝牙设备" class="headerlink" title="查找蓝牙设备"></a>查找蓝牙设备</h2><p>　　定义了一个<code>scanBleDevices(boolean enable)</code>方法用于开启和关闭扫描。这里使用了<code>BluetoothAdapter.startLeScan(LeScanCallback)</code>方法开启扫描，需要传入一个扫描回调：</p>
+<figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="keyword">private</span> BluetoothAdapter.LeScanCallback mBleScanCallback = <span class="keyword">new</span> BluetoothAdapter.LeScanCallback() &#123;</div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">onLeScan</span><span class="params">(BluetoothDevice bleDevice, <span class="keyword">int</span> rssi, <span class="keyword">byte</span>[] scanRecord)</span> </span>&#123;</div><div class="line">        <span class="keyword">if</span> (mIsScanning) &#123;</div><div class="line">            Log.d(TAG, <span class="string">"onLeScan：找到设备"</span> + bleDevice.getName());</div><div class="line">            <span class="keyword">if</span> (mTargetDeviceName.equals(bleDevice.getName())) &#123;</div><div class="line">                connectDevice(bleDevice);<span class="comment">//连接蓝牙设备</span></div><div class="line">            &#125;</div><div class="line">        &#125; <span class="keyword">else</span> &#123;</div><div class="line">            Log.d(TAG, <span class="string">"onLeScan: 停止扫描"</span>);</div><div class="line">        &#125;</div><div class="line">    &#125;</div><div class="line">&#125;;</div></pre></td></tr></table></figure>
+<p>　　这个回调也用于关闭蓝牙扫描的方法<code>BluetoothAdapter.stopLeScan(LeScanCallback)</code>，所以定义了一个布尔型变量<code>mIsScanning</code>判断蓝牙扫描的开启和关闭。<br>　　说了这么多，我们的RxJava好像还没登场。在扫描过程中，我们需要限定蓝牙的扫描的超时时间，不能让手机这么一直扫描，所以我们可以通过RxJava中的<code>timer</code>延时一段时间后执行停止扫描：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line">Observable.timer(SCAN_PERIOD, TimeUnit.MILLISECONDS).subscribe(<span class="keyword">new</span> Action1&lt;Long&gt;() &#123;</div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">call</span><span class="params">(Long aLong)</span> </span>&#123;</div><div class="line">        mIsScanning = <span class="keyword">false</span>;</div><div class="line">        mBleAdapter.stopLeScan(mBleScanCallback);</div><div class="line">    &#125;</div><div class="line">&#125;);</div></pre></td></tr></table></figure></p>
+<h2 id="连接蓝牙服务并接收数据"><a href="#连接蓝牙服务并接收数据" class="headerlink" title="连接蓝牙服务并接收数据"></a>连接蓝牙服务并接收数据</h2><p>　　当查找到名为<code>mTargetDeviceName</code>的目标蓝牙设备，就可以通过下面的方法去连接，准确的说是连接设备上的GATT服务：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="function"><span class="keyword">private</span> <span class="keyword">void</span> <span class="title">connectDevice</span><span class="params">(BluetoothDevice bleDevice)</span> </span>&#123;</div><div class="line">    scanBleDevices(<span class="keyword">false</span>);</div><div class="line">    mBleGatt = bleDevice.connectGatt(mContext, <span class="keyword">true</span>, <span class="keyword">new</span> BleGattCallback());</div><div class="line">    mBleGatt.connect();</div><div class="line">    Log.d(TAG, <span class="string">"开始连接设备："</span> + mBleGatt.getDevice().getName());</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>　　连接蓝牙设备前需要关闭蓝牙扫描。<code>bleDevice.connectGatt(mContext, true, new BleGattCallback())</code>方法返回了一个蓝牙GATT对象，这个方法中的<code>true</code>代表自动连接（蓝牙模块断电重启后，可以重新连接它），调用GATT的<code>connect()</code>方法进行连接，连接过程中会执行传入的回调<code>BleGattCallback</code>，这个回调继承了<code>BluetoothGattCallback</code>并重写了以下三个方法：</p>
+<h4 id="一、onConnectionStateChange"><a href="#一、onConnectionStateChange" class="headerlink" title="一、onConnectionStateChange"></a><strong>一、onConnectionStateChange</strong></h4><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">onConnectionStateChange</span><span class="params">(BluetoothGatt bleGatt, <span class="keyword">int</span> status, <span class="keyword">int</span> newState)</span> </span>&#123;</div><div class="line">    <span class="keyword">super</span>.onConnectionStateChange(bleGatt, status, newState);</div><div class="line">    Log.d(TAG, <span class="string">"onConnectionStateChange: 连接状态: "</span> + newState);</div><div class="line">    <span class="keyword">if</span> (newState == BluetoothGatt.STATE_CONNECTED) &#123;<span class="comment">//连接成功</span></div><div class="line">        Log.d(TAG, <span class="string">"onConnectionStateChange: 设备连接"</span>);</div><div class="line">        bleGatt.discoverServices();<span class="comment">//搜索服务</span></div><div class="line">    &#125; <span class="keyword">else</span> <span class="keyword">if</span> (newState == BluetoothGatt.STATE_DISCONNECTED) &#123;<span class="comment">//断开连接</span></div><div class="line">        Log.d(TAG, <span class="string">"onConnectionStateChange: 设备断开"</span>);</div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<p>这个方法监听连接状态的改变，连接状态有四个值：</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">值</th>
+<th style="text-align:left">描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left">STATE_CONNECTED</td>
+<td style="text-align:left">已连接</td>
+</tr>
+<tr>
+<td style="text-align:left">STATE_CONNECTING</td>
+<td style="text-align:left">正在连接</td>
+</tr>
+<tr>
+<td style="text-align:left">STATE_DISCONNECTED</td>
+<td style="text-align:left">断开连接</td>
+</tr>
+<tr>
+<td style="text-align:left">STATE_DISCONNECTING</td>
+<td style="text-align:left">正在断开连接</td>
+</tr>
+</tbody>
+</table>
+<p>　　当设备已连接时，需要通过<code>discoverServices()</code>查找GATT服务，查找服务过程中会执行重写的第二个方法<code>onServicesDiscovered</code>。</p>
+<h4 id="二、onServicesDiscovered"><a href="#二、onServicesDiscovered" class="headerlink" title="二、onServicesDiscovered"></a><strong>二、onServicesDiscovered</strong></h4><p>　　可以在此方法中获取<em>GATT的服务列表</em>，这个服务列表中的每一个服务对应着一个<em>BluetoothGattCharacteristic（用于通信）列表</em>，需要对这个列表通过<em>UUID</em>过滤出我们想要的<code>BluetoothGattCharacteristic</code>，然后就可以拿这个<code>BluetoothGattCharacteristic</code>进行通信了。</p>
+<blockquote>
+<p>关于 UUID<br>通用唯一标识符 (UUID) 是用于唯一标识信息的字符串 ID 的 128 位标准化格式。 UUID 的特点是其足够庞大，因此你可以选择任意随机值而不会发生冲突。 在此示例中，它被用于唯一标识应用的蓝牙服务。 要获取 UUID 以用于你的应用，你可以使用网络上的众多随机 UUID 生成器之一，然后使用 fromString(String) 初始化一个 UUID。不必过多纠结于UUID。</p>
+</blockquote>
+<p>　　上面这个过程如果用传统的方式编写的话，那就是<strong>列表遍历</strong>嵌套<strong>列表遍历</strong>再嵌套<strong>if判断</strong>，下次再看的话就是一堆迷之缩进，还好可以用RxJava写出链式的结构：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">onServicesDiscovered</span><span class="params">(<span class="keyword">final</span> BluetoothGatt bleGatt, <span class="keyword">int</span> status)</span> </span>&#123;</div><div class="line">    Log.d(TAG, <span class="string">"onServicesDiscovered: 查找服务: "</span> + bleGatt.getServices().size());</div><div class="line">    List&lt;BluetoothGattService&gt; serviceList = bleGatt.getServices();</div><div class="line">    Observable.from(serviceList)</div><div class="line">            .flatMap(<span class="keyword">new</span> Func1&lt;BluetoothGattService, Observable&lt;BluetoothGattCharacteristic&gt;&gt;() &#123;</div><div class="line">                <span class="meta">@Override</span></div><div class="line">                <span class="function"><span class="keyword">public</span> Observable&lt;BluetoothGattCharacteristic&gt; <span class="title">call</span><span class="params">(BluetoothGattService bleGattService)</span> </span>&#123;</div><div class="line">                    <span class="keyword">return</span> Observable.from(bleGattService.getCharacteristics());</div><div class="line">                &#125;</div><div class="line">            &#125;)</div><div class="line">            .filter(<span class="keyword">new</span> Func1&lt;BluetoothGattCharacteristic, Boolean&gt;() &#123;</div><div class="line">                <span class="meta">@Override</span></div><div class="line">                <span class="function"><span class="keyword">public</span> Boolean <span class="title">call</span><span class="params">(BluetoothGattCharacteristic bleGattChar)</span> </span>&#123;</div><div class="line">                    <span class="keyword">return</span> bleGattChar.getUuid().toString().equals(UUID);</div><div class="line">                &#125;</div><div class="line">            &#125;)</div><div class="line">            .subscribe(<span class="keyword">new</span> Action1&lt;BluetoothGattCharacteristic&gt;() &#123;</div><div class="line">                <span class="meta">@Override</span></div><div class="line">                <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">call</span><span class="params">(BluetoothGattCharacteristic bleGattChar)</span> </span>&#123;</div><div class="line">                    bleGatt.setCharacteristicNotification(bleGattChar, <span class="keyword">true</span>);<span class="comment">//设置开启接收蓝牙数据</span></div><div class="line">                    mBleGattChar = bleGattChar;</div><div class="line">                &#125;</div><div class="line">            &#125;);</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<h4 id="三、onCharacteristicChanged"><a href="#三、onCharacteristicChanged" class="headerlink" title="三、onCharacteristicChanged"></a><strong>三、onCharacteristicChanged</strong></h4><p>　　此方法用于<strong>接收蓝牙模块发送过来的数据</strong>，它是异步的，可以用RxJava方便的切换到Android主线程：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">onCharacteristicChanged</span><span class="params">(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic)</span> </span>&#123;</div><div class="line">    Log.d(TAG, <span class="string">"onCharacteristicChanged"</span>);</div><div class="line">    String receiveData = <span class="keyword">new</span> String(characteristic.getValue());</div><div class="line">    Log.d(TAG, <span class="string">"收到蓝牙发来数据："</span> + receiveData);</div><div class="line">    Observable.just(receiveData)</div><div class="line">            .observeOn(AndroidSchedulers.mainThread())</div><div class="line">            .subscribe(<span class="keyword">new</span> Action1&lt;String&gt;() &#123;</div><div class="line">                <span class="meta">@Override</span></div><div class="line">                <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">call</span><span class="params">(String receiveData)</span> </span>&#123;</div><div class="line">                    <span class="comment">//处理receiveData</span></div><div class="line">                &#125;</div><div class="line">        &#125;);</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>　　前面提到了整个蓝牙功能是一个工具类，那么我们怎么在我们想要的地方（Activity）接收到这个<code>receiveData</code>呢？也许你会说可以在这里写一个接口回调啊，是的没问题。在了解到可以通过RxJava实现EventBus事件总线后，我想可以写一个简单的<code>RxBus</code>在这里发射数据，在需要的地方订阅并接受数据。</p>
+<blockquote>
+<p>关于RxBus，你可以先看<a href="http://blog.kaush.co/2014/12/24/implementing-an-event-bus-with-rxjava-rxbus/" target="_blank" rel="external">implementing-an-event-bus-with-rxjava-rxbus</a>，然后可以看<a href="https://medium.com/@czyrux/state-propagation-in-android-with-rxjava-subjects-81db49a0dd8e#.itt7wf5zt" target="_blank" rel="external">state-propagation-in-android-with-rxjava-subjects</a>（需要科学上网）。此外，国内也有很多相关文章。</p>
+</blockquote>
+<p>先定义一个<code>Subject</code>，它既是观察者又是被观察者<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="keyword">private</span> Subject&lt;String, String&gt; mBus = <span class="keyword">new</span> SerializedSubject&lt;&gt;(PublishSubject.&lt;String&gt;create());</div></pre></td></tr></table></figure></p>
+<p>然后在<strong>处理receiveData</strong>的地方发射数据<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line">mBus.onNext(receiveData);</div></pre></td></tr></table></figure></p>
+<p>再定义一个方法用于接收数据<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="function"><span class="keyword">public</span> Observable&lt;String&gt; <span class="title">receiveData</span><span class="params">()</span> </span>&#123;</div><div class="line">    <span class="keyword">return</span> mBus;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>最后在需要接收数据的地方订阅<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line">mRxBle.receiveData().subscribe(<span class="keyword">new</span> Action1&lt;String&gt;() &#123;</div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">call</span><span class="params">(String receiveData)</span> </span>&#123;</div><div class="line">        sendTv.setText(mStringBuffer.append(receiveData).append(<span class="string">"\n"</span>));</div><div class="line">    &#125;</div><div class="line">&#125;);</div></pre></td></tr></table></figure></p>
+<h2 id="向蓝牙设备发送数据"><a href="#向蓝牙设备发送数据" class="headerlink" title="向蓝牙设备发送数据"></a>向蓝牙设备发送数据</h2><p>　　通信不仅仅是接收数据，还需要发送数据，这个实现起来很简单，只要使用我们之前拿到的<code>BluetoothGattCharacteristic</code>对象以及<code>BluetoothGatt</code>对象进行相关方法的调用就行，在项目中由于需要对数据进行延时发送，所以也用到了<code>timer</code>：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line">Observable.timer(time, TimeUnit.MILLISECONDS)</div><div class="line">        .subscribe(<span class="keyword">new</span> Action1&lt;Long&gt;() &#123;</div><div class="line">            <span class="meta">@Override</span></div><div class="line">            <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">call</span><span class="params">(Long l)</span> </span>&#123;</div><div class="line">                <span class="keyword">if</span> (mBleGatt != <span class="keyword">null</span> &amp;&amp; mBleGattChar != <span class="keyword">null</span>) &#123;</div><div class="line">                    mBleGattChar.setValue(data);<span class="comment">//设置数据</span></div><div class="line">                    <span class="keyword">boolean</span> isSend = mBleGatt.writeCharacteristic(mBleGattChar);<span class="comment">//写入（发送）数据</span></div><div class="line">                    Log.d(TAG, <span class="string">"发送："</span> + (isSend ? <span class="string">"成功"</span> : <span class="string">"失败"</span>));</div><div class="line">                &#125;</div><div class="line">            &#125;</div><div class="line">        &#125;);</div></pre></td></tr></table></figure></p>
+<p>　　RxJava的强大之处在于他有各种各样的操作符，可以对发布的数据源进行各种各样的处理，实际项目中有很多应用的场景。</p>
+<h2 id="最后"><a href="#最后" class="headerlink" title="最后"></a>最后</h2><p>　　我们写一个简单的demo进行测试一下，效果如下：</p>
+<ul>
+<li><p>　　Anndroid端发送<code>Hello,Ble</code>给蓝牙模块，接受蓝牙模块发过来的<code>Hello,Android</code></p>
+<div style="text-align: center;"><br><img src="http://oflybvyqn.bkt.clouddn.com/blog/gif/ble_android.gif"><br></div>
+</li>
+<li><p>　　使用调试助手调试蓝牙模块，接受Android端发送过来的<code>Hello,Ble</code>，向Android端发送<code>Hello,Android</code></p>
+<div style="text-align: center;"><br><img src="http://oflybvyqn.bkt.clouddn.com/blog/gif/ble.gif"><br></div>
+
+</li>
+</ul>
+<p>本文的代码地址：<a href="https://github.com/bestTao/RxBleDemo" target="_blank" rel="external">RxBleDemo</a></p>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;blockquote&gt;
+&lt;p&gt;本文同步于我的&lt;a href=&quot;http://gold.xitu.io/user/576274a82e958a005807b1ae&quot; target=&quot;_blank&quot; rel=&quot;external&quot;&gt;掘金专栏&lt;/a&gt;&lt;br&gt;本文的代码地址：&lt;a hre
+    
+    </summary>
+    
+    
+      <category term="Android" scheme="https://bestTao.github.io/tags/Android/"/>
+    
+      <category term="RxJava" scheme="https://bestTao.github.io/tags/RxJava/"/>
+    
+      <category term="蓝牙" scheme="https://bestTao.github.io/tags/%E8%93%9D%E7%89%99/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>一个Data Biding 数据流绑定的简单例子</title>
+    <link href="https://bestTao.github.io/2016/11/14/%E4%B8%80%E4%B8%AAData%20Biding%20%E6%95%B0%E6%8D%AE%E6%B5%81%E7%BB%91%E5%AE%9A%E7%9A%84%E7%AE%80%E5%8D%95%E4%BE%8B%E5%AD%90/"/>
+    <id>https://bestTao.github.io/2016/11/14/一个Data Biding 数据流绑定的简单例子/</id>
+    <published>2016-11-14T12:38:53.000Z</published>
+    <updated>2016-11-14T12:56:00.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>　　我曾经写的一个小<a href="https://github.com/bestTao/caipu_android" target="_blank">Demo</a>中有一个这样的需求，点击TabBar中的不同按钮会切换不同的页面，相应的标题栏的标题会随之改变，如下图：</p>
+<div style="text-align: center"><br><img src="http://oflybvyqn.bkt.clouddn.com/2016/11/14/FoLXy_gfv9pQGiN0YciYKx0c_jq3123.gif"><br></div>
+
+<p>这个底部TabBar就是三个ImageView，怎么实现呢？</p>
+<h2 id="朴素的写法"><a href="#朴素的写法" class="headerlink" title="朴素的写法"></a>朴素的写法</h2><p>首先底部TabBar的ImageView是有两种状态，选中和未选中，对吧，写个selector就搞定了：<br><figure class="highlight xml"><table><tr><td class="code"><pre><div class="line">&lt;?xml version="1.0" encoding="utf-8"?&gt;</div><div class="line"><span class="tag">&lt;<span class="name">selector</span> <span class="attr">xmlns:android</span>=<span class="string">"http://schemas.android.com/apk/res/android"</span>&gt;</span></div><div class="line">    <span class="tag">&lt;<span class="name">item</span> <span class="attr">android:drawable</span>=<span class="string">"@drawable/menu_selected"</span> <span class="attr">android:state_selected</span>=<span class="string">"true"</span> /&gt;</span></div><div class="line">    <span class="tag">&lt;<span class="name">item</span> <span class="attr">android:drawable</span>=<span class="string">"@drawable/menu"</span> /&gt;</span></div><div class="line"><span class="tag">&lt;/<span class="name">selector</span>&gt;</span></div></pre></td></tr></table></figure></p>
+<p>然后将三个标题和三个ImageView分别用数组和List存起来：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line">String mTitleStrs[] = &#123;<span class="string">"分类"</span>, <span class="string">"发现"</span>, <span class="string">"搜索"</span>&#125;;</div><div class="line">List&lt;ImageView&gt; mTabs = <span class="keyword">new</span> ArrayList&lt;&gt;(Arrays.asList(mBinding.ivMenu, mBinding.ivDiscovery, mBinding.ivSearch));</div></pre></td></tr></table></figure></p>
+<p>接下来具体代码如下<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="comment">//初始化默认选中第一个TabBar：</span></div><div class="line">setCurrentPage(<span class="number">0</span>);</div><div class="line"></div><div class="line"><span class="comment">//设置当前页面</span></div><div class="line"><span class="function"><span class="keyword">private</span> <span class="keyword">void</span> <span class="title">setCurrentPage</span><span class="params">(<span class="keyword">int</span> currentIndex)</span> </span>&#123;</div><div class="line">    mTabs.get(mLastIndex).setSelected(<span class="keyword">false</span>);<span class="comment">//上个tab选中状态设置为false</span></div><div class="line">    mBinding.setTitle(mTitleStrs[currentIndex]);<span class="comment">//当前页面下toolbar的标题</span></div><div class="line">    mTabs.get(currentIndex).setSelected(<span class="keyword">true</span>);<span class="comment">//当前tab选中状态设置为true</span></div><div class="line">    mLastIndex = currentIndex;</div><div class="line">&#125;</div><div class="line"></div><div class="line"><span class="comment">//底部导航栏三个按钮的点击监听</span></div><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">onClick</span><span class="params">(View v)</span> </span>&#123;</div><div class="line">    <span class="keyword">int</span> currentIndex = mTabs.indexOf(v);</div><div class="line">    <span class="keyword">if</span> (mLastIndex != currentIndex) &#123;</div><div class="line">        setCurrentPage(currentIndex);</div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>　　这里为了优化，定义了一个<code>mLastIndex</code>记录上次的点击位置，思路就是根据当前点击的ImageView获取当前的点击位置<code>currentIndex</code>，然后根据当前位置给标题栏设置标题、将当前点击的ImageView设置选中状态为true并且将上次选中的ImageView选中状态置为false，最后当前位置的值就变成上次的位置。<br>　　这种的写法也经过了我重构过的，可能还不够简洁。<br>　　全部代码在<a href="https://github.com/bestTao/caipu_android/blob/master/app/src/main/java/com/qiantao/caicai/activity/MainActivity.java" target="_blank">这里</a>。</p>
+<h2 id="Data-Binding优雅实现"><a href="#Data-Binding优雅实现" class="headerlink" title="Data Binding优雅实现"></a>Data Binding优雅实现</h2><p>　　学习React Native的时候，很羡慕他们的状态机制，各个的控件的样式是可以由它关联的state所决定，只要改变这个state的值，所有与之关联的控件都能发生相应的变化。现在使用Data Binding也能实现类似的效果。<br>　　Data Binding是官方库，上手容易，若你还没接触过，可以看这篇<a href="https://github.com/LyndonChin/MasteringAndroidDataBinding" target="_blank">精通Android Data Binding </a>。</p>
+<p>首先为我们的这个页面编写一个POJO类：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="keyword">public</span> <span class="class"><span class="keyword">class</span> <span class="title">Page</span> </span>&#123;</div><div class="line">    <span class="keyword">public</span> <span class="keyword">final</span> ObservableField&lt;Integer&gt; index = <span class="keyword">new</span> ObservableField&lt;&gt;();<span class="comment">//页面位置</span></div><div class="line">    <span class="keyword">public</span> <span class="keyword">final</span> ObservableField&lt;String&gt; title = <span class="keyword">new</span> ObservableField&lt;&gt;();<span class="comment">//页面标题</span></div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>将它引入布局文件：<br><figure class="highlight xml"><table><tr><td class="code"><pre><div class="line"><span class="tag">&lt;<span class="name">data</span>&gt;</span></div><div class="line">    <span class="tag">&lt;<span class="name">variable</span></span></div><div class="line">        <span class="attr">name</span>=<span class="string">"page"</span></div><div class="line">        <span class="attr">type</span>=<span class="string">"com.qiantao.myapplication.Page"</span>/&gt;</div><div class="line"><span class="tag">&lt;/<span class="name">data</span>&gt;</span></div></pre></td></tr></table></figure></p>
+<p>给标题栏设置标题：<br><figure class="highlight xml"><table><tr><td class="code"><pre><div class="line">android:text="@&#123;page.title&#125;"</div></pre></td></tr></table></figure></p>
+<p>重点来了，代替selector，可以这样设置ImageView：<br><figure class="highlight xml"><table><tr><td class="code"><pre><div class="line">android:src="@&#123;page.index==0? @drawable/menu_selected : @drawable/menu&#125;"</div></pre></td></tr></table></figure></p>
+<p>是的，xml文件也能引入逻辑代码，通过对当前<code>page</code>的<code>index</code>值是否等于此imageview的位置来决定显示选中或者未选中的图片。</p>
+<p>同时，我们还需要给ImageView设置点击事件监听，这需要我们自定义一个Handler：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="keyword">public</span> <span class="class"><span class="keyword">class</span> <span class="title">TabHandler</span> </span>&#123;</div><div class="line">    <span class="keyword">private</span> ActivityMainBinding mBinding;</div><div class="line">    <span class="keyword">public</span> String[] mTitles = &#123;<span class="string">"分类"</span>,<span class="string">"发现"</span>,<span class="string">"搜索"</span>&#125;;</div><div class="line"></div><div class="line">    <span class="function"><span class="keyword">public</span> <span class="title">TabHandler</span><span class="params">(ActivityMainBinding binding)</span> </span>&#123;</div><div class="line">        mBinding = binding;</div><div class="line">    &#125;</div><div class="line"></div><div class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">onTabSelected</span><span class="params">(<span class="keyword">int</span> index)</span> </span>&#123;</div><div class="line">        mBinding.getPage().title.set(mTitles[index]);</div><div class="line">        mBinding.getPage().index.set(index);</div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>在xml中引入此Handler后调用其<code>onTabSelected</code>方法即可：<br><figure class="highlight xml"><table><tr><td class="code"><pre><div class="line">android:onClick="@&#123;()-&gt;tabHandler.onTabSelected(0)&#125;"</div></pre></td></tr></table></figure></p>
+<p>最后一步在Activity中绑定handler和page给我们的视图：<br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line">TabHandler handler = <span class="keyword">new</span> TabHandler(mBinding);</div><div class="line">mBinding.setTabHandler(handler);</div><div class="line">Page page = <span class="keyword">new</span> Page();</div><div class="line">page.title.set(handler.mTitles[<span class="number">0</span>]);</div><div class="line">page.index.set(<span class="number">0</span>);</div><div class="line">mBinding.setPage(page);</div></pre></td></tr></table></figure></p>
+<p>这里当我们点击ImageView的时候，会传入当前位置的值给<code>onTabSelected</code>方法，这个方法会改变我们绑定的<code>Page</code>中的<code>index</code>和<code>title</code>，绑定了这两个值的标题栏和底部TabBar也就发生了变化。</p>
+<h2 id="写在后面"><a href="#写在后面" class="headerlink" title="写在后面"></a>写在后面</h2><p>　　通过以上的例子对比，我也很难说出哪种方法更好，毕竟在xml中引入逻辑不利于后期测试维护，而且可能会变得更加抽象，虽然这样写比较酷。写这个例子就是想说明Data Binding绝不仅仅是拿来当作Butter Knife减少findviewbyid代码来使的，他有MVVM的思想，通过binding，将ViewModel绑定给视图View。我对这个库会继续保持关注的。</p>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;p&gt;　　我曾经写的一个小&lt;a href=&quot;https://github.com/bestTao/caipu_android&quot; target=&quot;_blank&quot;&gt;Demo&lt;/a&gt;中有一个这样的需求，点击TabBar中的不同按钮会切换不同的页面，相应的标题栏的标题会随之改变，如下图：
+    
+    </summary>
+    
+    
+      <category term="Android" scheme="https://bestTao.github.io/tags/Android/"/>
+    
+      <category term="Data Binding" scheme="https://bestTao.github.io/tags/Data-Binding/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>年前书单计划</title>
+    <link href="https://bestTao.github.io/2016/11/09/%E5%B9%B4%E5%89%8D%E4%B9%A6%E5%8D%95%E8%AE%A1%E5%88%92/"/>
+    <id>https://bestTao.github.io/2016/11/09/年前书单计划/</id>
+    <published>2016-11-09T15:43:20.000Z</published>
+    <updated>2016-12-18T05:11:56.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>先定一个小目标，把这些书读完！</p>
+<ul>
+<li><del><a href="https://book.douban.com/subject/10797189/" target="_blank" rel="external">编写可读代码的艺术</a></del></li>
+<li><del><a href="https://book.douban.com/subject/4199741/" target="_blank" rel="external">代码整洁之道</a></del></li>
+<li><del>RxJavaEssentials</del></li>
+<li>Learning Reactive Programming</li>
+</ul>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;p&gt;先定一个小目标，把这些书读完！&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;del&gt;&lt;a href=&quot;https://book.douban.com/subject/10797189/&quot; target=&quot;_blank&quot; rel=&quot;external&quot;&gt;编写可读代码的艺术&lt;/a&gt;&lt;/del&gt;&lt;
+    
+    </summary>
+    
+    
+      <category term="阅读" scheme="https://bestTao.github.io/tags/%E9%98%85%E8%AF%BB/"/>
+    
+      <category term="书单" scheme="https://bestTao.github.io/tags/%E4%B9%A6%E5%8D%95/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>闪屏页的正确使用（译）</title>
+    <link href="https://bestTao.github.io/2016/11/03/%E9%97%AA%E5%B1%8F%E9%A1%B5%E7%9A%84%E6%AD%A3%E7%A1%AE%E4%BD%BF%E7%94%A8%EF%BC%88%E8%AF%91%EF%BC%89/"/>
+    <id>https://bestTao.github.io/2016/11/03/闪屏页的正确使用（译）/</id>
+    <published>2016-11-03T11:40:20.000Z</published>
+    <updated>2016-11-30T13:45:06.000Z</updated>
+    
+    <content type="html"><![CDATA[<h2 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h2><p>　　最近看了一篇关于App启动页的文章，作者介绍了如何使闪屏页用正确的延时跳转到主界面，虽然文章是去年写的，但是作者推荐的启动页最小化延时的方法倒是挺符合当下火热的<a href="http://reactivex.io/" target="_blank" rel="external">ReactiveX</a>的思想：<em>Less is More</em>。当然为了营销在启动页植入广告是另一种使用场景。<br>　　原文链接：<a href="https://www.bignerdranch.com/blog/splash-screens-the-right-way/" target="_blank" rel="external">Splash Screens the Right Way</a>，作者：<a href="https://www.bignerdranch.com/about-us/nerds/chris-stewart/" target="_blank" rel="external">Chris Stewart</a><br>　　<em>如有译误，请指出。</em></p>
+<h2 id="正文"><a href="#正文" class="headerlink" title="正文"></a>正文</h2><p>　　一想到闪屏我就有点生气，只是说这个词让我感觉不舒服。<br>　　闪屏页就是浪费你的时间，对吧？作为一个Android开发者，当我看见一个闪屏页面，我就会想到一些可怜的开发者不得不在自己的代码中塞入三秒的延时。<br>　　然后，我就得花三秒钟盯着这些图片直到我可以用这个应用，而且每当我启动它的时候我都得这样做，我知道我打开的是哪个应用，我也知道这个应用的功能，能不能让我直接快乐的玩耍。</p>
+<h4 id="Google的建议"><a href="#Google的建议" class="headerlink" title="Google的建议"></a>Google的建议</h4><p>　　你可能会惊讶Google竟然会提倡你去使用闪屏页，在Material Design规范中的<a href="https://material.google.com/patterns/launch-screens.html" target="_blank" rel="external">这里</a>提到了（<em>译注：需科学上网</em>）。<br>　　因为之前可不是这样的，Google曾经主张反对闪屏页，甚至称之为<a href="https://www.youtube.com/watch?v=pEGWcMTxs3I&amp;feature=youtu.be&amp;t=1434" target="_blank" rel="external">反面教材</a>（<em>译注：需科学上网</em>）。</p>
+<div style="text-align: center"><br><img src="https://www.bignerdranch.com/img/blog/2015/08/adia_no_splash.png"><br></div>
+
+<p>为什么？</p>
+<h4 id="闪屏页的正确使用"><a href="#闪屏页的正确使用" class="headerlink" title="闪屏页的正确使用"></a>闪屏页的正确使用</h4><p>　　我认为Google并不是自相矛盾的，旧理念和新立场可以并存（这么说吧，使用闪屏页面去耗费用户的时间仍然不是一个好的想法，请不要那样做）。<br>　　然而，Android的众多应用的确需要一定量的时间去启动，尤其是在冷启动上，这个延时启动你是无法避免的，与其在启动的时候留着白屏，为何不给用户展示有用的东西？这才是Google所倡导的方式。在用户第一次启动的时候，不要浪费用户的时间，但是也不要给他们留白屏。<br>　　如果你去看最近Google的一些应用的更新，你会看到闪屏页合理的使用。例如，YouTube的应用：</p>
+<div style="text-align: center"><br><img src="https://www.bignerdranch.com/img/blog/2015/08/youtube_splash.gif"><br></div>
+
+<p>　　你看闪屏所花费的时间，就是应用配置自己去启动所需要的时间。在冷启动上也是这样的，这就意味着这可能是启动比较缓慢。如果应用有缓存，闪屏界面将会几乎立即跳转。</p>
+<h4 id="闪屏页的实现"><a href="#闪屏页的实现" class="headerlink" title="闪屏页的实现"></a>闪屏页的实现</h4><p>　　实现一个闪屏页的正确方式可能和你想象的有些不同，你得先准备好你所看到的splash view，甚至先于给你的SplashActivity准备好一个布局文件。<br>　　所以你都用不着布局文件，代替它的是将activity的主题背景指定为闪屏背景。实现这个，第一步是在<code>res/drawable</code>目录下创建一个XML drawable。<br>　　<em>注：所有的代码都在<a href="https://github.com/cstew/Splash" target="_blank" rel="external">Github</a>上。</em><br><figure class="highlight xml"><table><tr><td class="code"><pre><div class="line">&lt;?xml version="1.0" encoding="utf-8"?&gt;</div><div class="line"><span class="tag">&lt;<span class="name">layer-list</span> <span class="attr">xmlns:android</span>=<span class="string">"http://schemas.android.com/apk/res/android"</span>&gt;</span>   </div><div class="line">    <span class="tag">&lt;<span class="name">item</span></span></div><div class="line">        <span class="attr">android:drawable</span>=<span class="string">"@color/gray"</span>/&gt;</div><div class="line">    <span class="tag">&lt;<span class="name">item</span>&gt;</span></div><div class="line">    <span class="tag">&lt;<span class="name">bitmap</span></span></div><div class="line">        <span class="attr">android:gravity</span>=<span class="string">"center"</span></div><div class="line">        <span class="attr">android:src</span>=<span class="string">"@mipmap/ic_launcher"</span>/&gt;    </div><div class="line">    <span class="tag">&lt;/<span class="name">item</span>&gt;</span>   </div><div class="line"><span class="tag">&lt;/<span class="name">layer-list</span>&gt;</span></div></pre></td></tr></table></figure></p>
+<p>　　这里我设置了一个背景色和一张图片。</p>
+<p>　　然后，你要将这个设置到<code>SplashActivity</code>的主题中作为背景。进入你的<code>style.xml</code>文件，然后为闪屏页添加一个新的主题：<br><figure class="highlight xml"><table><tr><td class="code"><pre><div class="line"><span class="tag">&lt;<span class="name">resources</span>&gt;</span></div><div class="line">    <span class="comment">&lt;!-- Base application theme. --&gt;</span></div><div class="line">    <span class="tag">&lt;<span class="name">style</span> <span class="attr">name</span>=<span class="string">"AppTheme"</span> <span class="attr">parent</span>=<span class="string">"Theme.AppCompat.Light.DarkActionBar"</span>&gt;</span><span class="xml"></span></div><div class="line">        <span class="comment">&lt;!-- Customize your theme here. --&gt;</span></div><div class="line">    <span class="tag">&lt;/<span class="name">style</span>&gt;</span>    </div><div class="line">    <span class="tag">&lt;<span class="name">style</span> <span class="attr">name</span>=<span class="string">"SplashTheme"</span> <span class="attr">parent</span>=<span class="string">"Theme.AppCompat.NoActionBar"</span>&gt;</span><span class="xml"></span></div><div class="line">        <span class="tag">&lt;<span class="name">item</span> <span class="attr">name</span>=<span class="string">"android:windowBackground"</span>&gt;</span>@drawable/background_splash<span class="tag">&lt;/<span class="name">item</span>&gt;</span></div><div class="line">    <span class="tag">&lt;/<span class="name">style</span>&gt;</span></div><div class="line"><span class="tag">&lt;/<span class="name">resources</span>&gt;</span></div></pre></td></tr></table></figure></p>
+<p>　　在你新建的<code>SplashTheme</code>中设置它的<code>windowBackground</code>属性为你之前建的XML drawable，然后到<code>AndroidManifest.xml</code>中，将这个主题配置给你的<code>SplashActivity</code><br><figure class="highlight xml"><table><tr><td class="code"><pre><div class="line"><span class="tag">&lt;<span class="name">activity</span></span></div><div class="line">    <span class="attr">android:name</span>=<span class="string">".SplashActivity"</span></div><div class="line">    <span class="attr">android:theme</span>=<span class="string">"@style/SplashTheme"</span>&gt;</div><div class="line">    <span class="tag">&lt;<span class="name">intent-filter</span>&gt;</span></div><div class="line">        <span class="tag">&lt;<span class="name">action</span> <span class="attr">android:name</span>=<span class="string">"android.intent.action.MAIN"</span> /&gt;</span>    </div><div class="line">        <span class="tag">&lt;<span class="name">category</span> <span class="attr">android:name</span>=<span class="string">"android.intent.category.LAUNCHER"</span> /&gt;</span></div><div class="line">    <span class="tag">&lt;/<span class="name">intent-filter</span>&gt;</span></div><div class="line"><span class="tag">&lt;/<span class="name">activity</span>&gt;</span></div></pre></td></tr></table></figure></p>
+<p>　　最后，你的<code>SplashActivity</code>应该能直接跳转到<code>MainActivity</code><br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="keyword">public</span> <span class="class"><span class="keyword">class</span> <span class="title">SplashActivity</span> <span class="keyword">extends</span> <span class="title">AppCompatActivity</span> </span>&#123;   </div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">onCreate</span><span class="params">(Bundle savedInstanceState)</span> </span>&#123;</div><div class="line">        <span class="keyword">super</span>.onCreate(savedInstanceState);     </div><div class="line">        Intent intent = <span class="keyword">new</span> Intent(<span class="keyword">this</span>, MainActivity.class);</div><div class="line">        startActivity(intent);</div><div class="line">        finish();</div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>　　注意你不需要为你的<code>SplashActivity</code>设置一个视图，这个视图来自于主题，在主题中为你的<code>SplashActivity</code>设置UI就足够了。<br>　　如果你的确需要为你的闪屏页设置一个布局文件，那这个布局文件将只在你的应用完全初始化完后才显示，这太迟了。因为在应用完成初始化之前，这个闪屏页只展示很短的时间。</p>
+<h4 id="预期结果"><a href="#预期结果" class="headerlink" title="预期结果"></a>预期结果</h4><p>　　执行完这些步骤，你就以正确的方式完成了这个闪屏页：</p>
+<div style="text-align: center"><br><img src="https://www.bignerdranch.com/img/blog/2015/08/sample_splash.gif"><br></div>
+
+<p>　　学会了以上的知识，让你的闪屏页正确的运转起来。不要浪费用户的时间，并且在用户等待的时候展示给他们有用的东西。</p>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;h2 id=&quot;前言&quot;&gt;&lt;a href=&quot;#前言&quot; class=&quot;headerlink&quot; title=&quot;前言&quot;&gt;&lt;/a&gt;前言&lt;/h2&gt;&lt;p&gt;　　最近看了一篇关于App启动页的文章，作者介绍了如何使闪屏页用正确的延时跳转到主界面，虽然文章是去年写的，但是作者推荐的启动页最小化延时的
+    
+    </summary>
+    
+    
+      <category term="Android" scheme="https://bestTao.github.io/tags/Android/"/>
+    
+      <category term="启动页" scheme="https://bestTao.github.io/tags/%E5%90%AF%E5%8A%A8%E9%A1%B5/"/>
+    
+      <category term="闪屏" scheme="https://bestTao.github.io/tags/%E9%97%AA%E5%B1%8F/"/>
+    
+      <category term="翻译" scheme="https://bestTao.github.io/tags/%E7%BF%BB%E8%AF%91/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>使用VSCode开发React-Native的正确姿势</title>
+    <link href="https://bestTao.github.io/2016/10/25/%E4%BD%BF%E7%94%A8VSCode%E5%BC%80%E5%8F%91React-Native%E7%9A%84%E6%AD%A3%E7%A1%AE%E5%A7%BF%E5%8A%BF/"/>
+    <id>https://bestTao.github.io/2016/10/25/使用VSCode开发React-Native的正确姿势/</id>
+    <published>2016-10-25T15:17:10.000Z</published>
+    <updated>2016-11-11T12:59:58.000Z</updated>
+    
+    <content type="html"><![CDATA[<h3 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h3><p>使用VSCode开发React-Native是个不错的选择，因为这个编辑器十分简洁、流畅，并且微软官方提供了<code>React Native Tools</code>插件，支持代码高亮、debug以及代码提示等十分强大的功能，并且VSCode本身的代码跳转十分优秀。但是我下载了此插件，发现其他功能正常，唯独代码没法正确提示，右下角也没有显示<code>salsa</code>。经过我的不懈Google以及查看官方文档：<a href="https://code.visualstudio.com/Docs/languages/javascript" target="_blank" rel="external">JavaScript in VS Code</a>，最终找到了替代解决方案。本人的开发平台是Windows。</p>
+<h3 id="解决方案"><a href="#解决方案" class="headerlink" title="解决方案"></a>解决方案</h3><h4 id="一、配置Typescript"><a href="#一、配置Typescript" class="headerlink" title="一、配置Typescript"></a>一、配置Typescript</h4><p><strong>1.全局安装<code>typescript</code></strong></p>
+<p><code>npm install typescript@next -g</code></p>
+<p>安装完成会如图所示：</p>
+<p><img src="http://p1.bqimg.com/567571/91acd3ee1c00d1ab.jpg" alt=""></p>
+<p>当我们重启VSCode会得到提示：全局安装的typescript与VSCode所指向的版本号不一致，所以我们要进行下一步操作。</p>
+<p><strong>2.配置用户设置<code>settings.json</code>，通过<code>文件&gt;首选项&gt;用户设置</code>即可打开。</strong></p>
+<p>指定<code>typescript</code>的<code>lib</code>文件夹的路径，这个路径在安装完成时如上图所示，根据我的安装路径，对用户设置添加如下更改：</p>
+<p><code>&quot;typescript.tsdk&quot;: &quot;C:/Users/钱涛/AppData/Roaming/npm/node_modules/typescript/lib&quot;</code></p>
+<p>重启后你的VSCode的下方会显示出Typescript的版本号，例如：<img src="http://p1.bqimg.com/567571/c62c1a1f7df8e5d9.jpg" alt=""></p>
+<p>有了以上的设置，我们从<code>react-native</code>包中引入组件模块时就会有相应的提示，我们还可以进行进一步的设置</p>
+<h4 id="二、配置TypeScript-Definition-Files-Typings"><a href="#二、配置TypeScript-Definition-Files-Typings" class="headerlink" title="二、配置TypeScript Definition Files (Typings)"></a>二、配置TypeScript Definition Files (Typings)</h4><p>官方对其是这样解释的：</p>
+<blockquote>
+<p>You get VS Code IntelliSense for third-party libraries and modules with type definition *.d.ts files. TypeScript definition files are written in TypeScript so they can express the data types of parameters and functions, allowing VS Code to provide a rich IntelliSense experience.</p>
+</blockquote>
+<p>大体意思就是通过Typings能对第三方库例如咱们所使用的<code>react-native</code>进行其变量及方法的提示。</p>
+<p><strong>1.全局安装<code>typings</code></strong></p>
+<p><code>npm install typings --global</code></p>
+<p>安装完成如下图所示：</p>
+<p><img src="http://p1.bqimg.com/567571/1ee3f54070152403.jpg" alt=""></p>
+<p><strong>2.在当前项目根目录安装相应的typings包</strong></p>
+<p>可以在VSCode中通过快捷键<code>Ctrl+Shift+C</code>打开控制台并定位到当前项目的根目录，然后全局安装：</p>
+<p><code>typings install dt~react-native --save --global</code></p>
+<p>安装完成如下图所示：</p>
+<p><img src="http://p1.bqimg.com/567571/e1dffcda0f488e27.jpg" alt=""></p>
+<p>并且你的VSCode的根目录下会多一个<code>typings.json</code>文件。</p>
+<p>至此配置完以后编写代码就会可以自动提示补全：</p>
+<p><img src="http://p1.bqimg.com/567571/f4005a8af5ce249f.jpg" alt=""></p>
+<p>并且鼠标移过去还能有相应的文档提示了</p>
+<h3 id="插件推荐"><a href="#插件推荐" class="headerlink" title="插件推荐"></a>插件推荐</h3><p>为了开发的便捷，我还推荐以下插件：</p>
+<ul>
+<li><p><code>Auto Close Tag</code> 自动闭合标签</p>
+</li>
+<li><p><code>Auto Rename Tag</code> 自动重命名标签，配合上面的插件使用，基本上能赶上IntelliJ IDEA系的功能了</p>
+</li>
+<li><p><code>Reactjs code snippets</code> react的代码提示，如<code>componentWillMount</code>方法可以通过<code>cwm</code>直接获得</p>
+</li>
+<li><p><code>Path Intellisense</code> 文件路径提示补全</p>
+</li>
+</ul>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;h3 id=&quot;前言&quot;&gt;&lt;a href=&quot;#前言&quot; class=&quot;headerlink&quot; title=&quot;前言&quot;&gt;&lt;/a&gt;前言&lt;/h3&gt;&lt;p&gt;使用VSCode开发React-Native是个不错的选择，因为这个编辑器十分简洁、流畅，并且微软官方提供了&lt;code&gt;React Nati
+    
+    </summary>
+    
+    
+      <category term="React-Native" scheme="https://bestTao.github.io/tags/React-Native/"/>
+    
+      <category term="VSCode" scheme="https://bestTao.github.io/tags/VSCode/"/>
+    
+      <category term="编辑器配置" scheme="https://bestTao.github.io/tags/%E7%BC%96%E8%BE%91%E5%99%A8%E9%85%8D%E7%BD%AE/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>Android中ListView多种Item布局的实现</title>
+    <link href="https://bestTao.github.io/2015/12/26/android-article01/"/>
+    <id>https://bestTao.github.io/2015/12/26/android-article01/</id>
+    <published>2015-12-26T04:43:20.000Z</published>
+    <updated>2016-11-11T12:58:56.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>我们在对ListView设置item的布局的时候，通常只会考虑到一种item。但是多种item布局的情况还是很常见的，比如说聊天界面，需要用两种item布局来分别表示发送和接收的消息。</p>
+<h3 id="初步的思路"><a href="#初步的思路" class="headerlink" title="初步的思路"></a>初步的思路</h3><p>刚开始我的想法是通过对发送消息的实体类中添加一个布尔型变量来区分消息是发送的还是接收的:</p>
+<figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="keyword">public</span> <span class="class"><span class="keyword">class</span> <span class="title">Messages</span> </span>&#123;  </div><div class="line">    <span class="keyword">private</span> <span class="keyword">boolean</span> isMe;  </div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<p>在BaseAdapter的getView()方法中通过判断当前显示item的消息的isMe属性来给convertView设置不同的layout，但是由于convertView的复用和优化，会导致显示错乱，达不到预期的结果。</p>
+<h3 id="正确做法"><a href="#正确做法" class="headerlink" title="正确做法"></a>正确做法</h3><p>BaseAdapter自带两个方法可以实现这种需求</p>
+<ul>
+<li>getItemViewType() 获得item的布局类型</li>
+<li>getViewTypeCount() 获得item的布局的个数</li>
+</ul>
+<h3 id="示例"><a href="#示例" class="headerlink" title="示例"></a>示例</h3><p>模拟聊天收发消息的两种item布局<br><strong>MessageAdapter.java</strong><br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="keyword">public</span> <span class="class"><span class="keyword">class</span> <span class="title">MessageAdapter</span> <span class="keyword">extends</span> <span class="title">BaseAdapter</span> </span>&#123;</div><div class="line">    <span class="keyword">private</span> Context context;</div><div class="line">    <span class="keyword">private</span> List&lt;Messages&gt; data;</div><div class="line">    <span class="keyword">private</span> LayoutInflater inflater;</div><div class="line">    <span class="function"><span class="keyword">public</span> <span class="title">MessageAdapter</span><span class="params">(Context context, List&lt;Messages&gt; data)</span> </span>&#123;</div><div class="line">        <span class="keyword">this</span>.context = context;</div><div class="line">        setData(data);</div><div class="line">        inflater = LayoutInflater.from(<span class="keyword">this</span>.context);</div><div class="line">    &#125;</div><div class="line">    <span class="function"><span class="keyword">public</span> List&lt;Messages&gt; <span class="title">getData</span><span class="params">()</span> </span>&#123;</div><div class="line">        <span class="keyword">return</span> data;</div><div class="line">    &#125;</div><div class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">setData</span><span class="params">(List&lt;Messages&gt; data)</span> </span>&#123;</div><div class="line">        <span class="keyword">if</span> (data == <span class="keyword">null</span>) &#123;</div><div class="line">            data = <span class="keyword">new</span> ArrayList&lt;Messages&gt;();</div><div class="line">        &#125;</div><div class="line">        <span class="keyword">this</span>.data = data;</div><div class="line">    &#125;</div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">int</span> <span class="title">getCount</span><span class="params">()</span> </span>&#123;</div><div class="line">        <span class="keyword">return</span> data.size();</div><div class="line">    &#125;</div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">public</span> Messages <span class="title">getItem</span><span class="params">(<span class="keyword">int</span> position)</span> </span>&#123;</div><div class="line">        <span class="keyword">return</span> getData().get(position);</div><div class="line">    &#125;</div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">long</span> <span class="title">getItemId</span><span class="params">(<span class="keyword">int</span> position)</span> </span>&#123;</div><div class="line">        <span class="keyword">return</span> position;</div><div class="line">    &#125;</div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">public</span> View <span class="title">getView</span><span class="params">(<span class="keyword">int</span> position, View convertView, ViewGroup parent)</span> </span>&#123;</div><div class="line">        ViewHolder holder = <span class="keyword">null</span>;</div><div class="line">        Messages message = getItem(position);</div><div class="line">        <span class="keyword">if</span> (convertView == <span class="keyword">null</span>) &#123;</div><div class="line">            holder = <span class="keyword">new</span> ViewHolder();</div><div class="line">            <span class="keyword">if</span> (getItemViewType(position) == MESSAGE_TYPE_ME) &#123;</div><div class="line">                convertView = inflater.inflate(R.layout.item_isme, <span class="keyword">null</span>);</div><div class="line">            &#125; <span class="keyword">else</span> &#123;</div><div class="line">                convertView = inflater.inflate(R.layout.item_notme, <span class="keyword">null</span>);</div><div class="line">            &#125;</div><div class="line">            holder.tvText = (TextView) convertView.findViewById(R.id.tv_message);</div><div class="line">            convertView.setTag(holder);</div><div class="line">        &#125; <span class="keyword">else</span> &#123;</div><div class="line">            holder = (ViewHolder) convertView.getTag();</div><div class="line">        &#125;</div><div class="line">        holder.tvText.setText(message.getText());</div><div class="line">        <span class="keyword">return</span> convertView;</div><div class="line">    &#125;</div><div class="line">    <span class="class"><span class="keyword">class</span> <span class="title">ViewHolder</span> </span>&#123;</div><div class="line">        TextView tvText;</div><div class="line">    &#125;</div><div class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="keyword">int</span> MESSAGE_TYPE_ME = <span class="number">0</span>;</div><div class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="keyword">int</span> MESSAGE_TYPE_NOTME = <span class="number">1</span>;</div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">int</span> <span class="title">getItemViewType</span><span class="params">(<span class="keyword">int</span> position)</span> </span>&#123;</div><div class="line">        <span class="keyword">return</span> data.get(position).isMe() ? MESSAGE_TYPE_ME : MESSAGE_TYPE_NOTME;</div><div class="line">    &#125;</div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">int</span> <span class="title">getViewTypeCount</span><span class="params">()</span> </span>&#123;</div><div class="line">        <span class="keyword">return</span> <span class="number">2</span>;</div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+<p>用到的实体类Message就不贴出来了</p>
+<p><strong>MainActivity.java</strong><br><figure class="highlight java"><table><tr><td class="code"><pre><div class="line"><span class="keyword">public</span> <span class="class"><span class="keyword">class</span> <span class="title">MainActivity</span> <span class="keyword">extends</span> <span class="title">Activity</span> </span>&#123;</div><div class="line">    <span class="keyword">private</span> ListView lvMessage;</div><div class="line">    <span class="keyword">private</span> MessageAdapter adapter;</div><div class="line">    <span class="keyword">private</span> List&lt;Messages&gt; data;</div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">onCreate</span><span class="params">(Bundle savedInstanceState)</span> </span>&#123;  </div><div class="line">        <span class="keyword">super</span>.onCreate(savedInstanceState);</div><div class="line">        setContentView(R.layout.activity_main);</div><div class="line"></div><div class="line">        lvMessage =(ListView) findViewById(R.id.lv_message);</div><div class="line">        data = <span class="keyword">new</span> ArrayList&lt;Messages&gt;();</div><div class="line">        adapter = <span class="keyword">new</span> MessageAdapter(<span class="keyword">this</span>, data);</div><div class="line">        lvMessage.setAdapter(adapter);</div><div class="line">    &#125;</div><div class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">doClick</span><span class="params">(View v)</span> </span>&#123;</div><div class="line">        <span class="keyword">switch</span> (v.getId()) &#123;</div><div class="line">        <span class="keyword">case</span> R.id.btn_notme:  </div><div class="line">            data.add(<span class="keyword">new</span> Messages(<span class="string">"这是接收的消息"</span>, <span class="keyword">false</span>));  </div><div class="line">            adapter.notifyDataSetChanged();</div><div class="line">            lvMessage.setSelection(lvMessage.getBottom());  </div><div class="line">            <span class="keyword">break</span>;</div><div class="line">        <span class="keyword">case</span> R.id.btn_isme:  </div><div class="line">            data.add(<span class="keyword">new</span> Messages(<span class="string">"这是发送的消息"</span>, <span class="keyword">true</span>));  </div><div class="line">            adapter.notifyDataSetChanged();</div><div class="line">            lvMessage.setSelection(lvMessage.getBottom());  </div><div class="line">            <span class="keyword">break</span>;</div><div class="line">        &#125;</div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure></p>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;p&gt;我们在对ListView设置item的布局的时候，通常只会考虑到一种item。但是多种item布局的情况还是很常见的，比如说聊天界面，需要用两种item布局来分别表示发送和接收的消息。&lt;/p&gt;
+&lt;h3 id=&quot;初步的思路&quot;&gt;&lt;a href=&quot;#初步的思路&quot; class=&quot;h
+    
+    </summary>
+    
+    
+      <category term="Android" scheme="https://bestTao.github.io/tags/Android/"/>
+    
+      <category term="ListView" scheme="https://bestTao.github.io/tags/ListView/"/>
+    
+      <category term="布局" scheme="https://bestTao.github.io/tags/%E5%B8%83%E5%B1%80/"/>
+    
+  </entry>
+  
+</feed>
